@@ -11,7 +11,7 @@ When **Face tracking** is on and a point magnitude or a meme morph is non-zero, 
    second (default 10 FPS) - not once per rendered frame.
 2. Hands that frame to a **background worker thread** that runs OpenCV's YuNet
    (`cv::FaceDetectorYN`) on the CPU.
-3. For every detected face, places **three anchor points directly on the YuNet landmarks**, so they
+3. For every detected face, places **three anchor points directly on the facial landmarks**, so they
    sit on the actual facial features and follow the head's size, tilt (roll) and turn
    (yaw/pitch) with the features themselves:
    * **Point 1 - eyes**: the midpoint of the two eyes,
@@ -20,11 +20,35 @@ When **Face tracking** is on and a point magnitude or a meme morph is non-zero, 
    Because the anchors are the landmarks themselves, a tilted, turned or nodding head moves the
    points exactly with it. If landmarks are missing, fractions of the detection box are used as a
    fallback.
+
+### Dense landmarks (MediaPipe Face Mesh)
+
+YuNet only returns **five** points, which makes the 3D head pose jump around (the five points are
+nearly coplanar, so `solvePnP` is ill-conditioned). When the optional dense model is present the
+tracker instead runs **Google's MediaPipe Face Mesh V2** (ONNX, executed with OpenCV DNN) on a
+256x256 face crop and gets **478 3D landmarks** (468 face mesh + 10 iris):
+
+* The three anchors come from precise mesh points: `eyes` = midpoint of the two **iris centres**
+  (indices 468/473), `nose` = the **nose tip** (index 1), `mouth` = the **inner lips** (13/14).
+* The head pose is fitted with `solvePnP` over all **468** correspondences against Google's
+  `canonical_face_model.obj` (converted to this project's x-right / y-down / z-into convention),
+  then `solvePnPRefineLM`. `roll` still comes from the iris-to-iris axis.
+* If the model is missing or fails, the tracker silently falls back to YuNet's five points.
+
+The model bundle (`data/face_landmarks.onnx`, ~4.9 MB, and `data/canonical_face_model.obj`) is
+Apache-2.0 (Google MediaPipe). Note: this ONNX is a tf2onnx export with an **NHWC** input, so the
+blob is assembled in NHWC by hand (`src/face_mesh.hpp`) - OpenCV DNN's usual NCHW blob makes it
+fail.
 4. Draws one circular distortion zone per (face x enabled point). Where a point lands is
    `anchor + offset`; the point's own `radius` and `magnitude` are shared by all faces.
 
 Anchors are normalised to **0..100** (percent of frame width/height) - exactly the units the
 shader uses - and faces are sorted **left to right**.
+
+The head orientation is fitted with `cv::solvePnP` (EPNP initial guess, then `solvePnPRefineLM`).
+The fit is written generically over **N correspondences** (`estimateHeadPosePoints`), so it already
+scales to a dense landmark model (dozens of points) - far more stable than the five YuNet points.
+`roll` is always taken from the eye axis, which stays robust even when the 3D fit is noisy.
 
 The **animation is configured per point**, in advance, before any face is seen. `Add` / `Set` /
 `Start` animate a point's magnitude (or offset/radius); the accumulation of `Add` is shared by
@@ -49,7 +73,7 @@ dock and `FaceTrack`.
 |---|---|---|
 | `effect_blur` | off | Blur the **whole detected face box** (feathered at the edge), independent of the distortion |
 | `face_blur_px` | 24 | Blur radius in pixels (2..128); larger = stronger/softer cover |
-| `effect_debug` | off | Overlay coloured markers: point anchors (1 red, 2 green, 3 blue) and the raw YuNet landmarks (right eye yellow, left eye cyan, nose tip magenta, right mouth orange, left mouth violet) |
+| `effect_debug` | off | Overlay **everything the tracker produced**: the detection box, the **eye axis** (yellow - its angle is the head roll), the **face vertical axis** eye->nose->mouth (cyan), a **head-pose gizmo** at the nose (red = face right, green = face down, blue = into the scene, so yaw shows as the blue axis appears) and the point anchors (1 red = eyes, 2 green = nose, 3 blue = mouth) plus the raw YuNet landmarks (right eye yellow, left eye cyan, nose tip magenta, right mouth orange, left mouth violet) |
 | `face_scale` | on | Scale each point's `radius` and `offset` by the detected **face height**, so a distant face gets proportionally smaller points (adapts to size) |
 
 * **Face blur** now uses the face **box** (cx, cy, w, h), not the small point circles, so the face is
@@ -79,7 +103,8 @@ Face tracking is compiled in only when OpenCV is present:
   (`-DOpenCV_DIR=.../opencv/build`). `find_package(OpenCV COMPONENTS core imgproc objdetect dnn)`
   enables it; if OpenCV is not found the plugin still builds and the tracker stays inert.
 * The YuNet model `data/face_detection_yunet_2023mar.onnx` ships with the plugin and is copied to
-  `data/obs-plugins/obs-parameter-animator/`.
+  `data/obs-plugins/obs-parameter-animator/`. So do the optional dense model `data/face_landmarks.onnx`
+  and its canonical 3D model `data/canonical_face_model.obj` (MediaPipe Face Mesh, Apache-2.0).
 * On Windows the matching `opencv_world<ver>.dll` is installed next to the plugin DLL. The debug
   OpenCV import lib uses a different ABI (`cv::debug_build_guard`), so the release import lib is
   always linked.
@@ -136,6 +161,10 @@ eased toward the latest detection on **every render frame**:
 * Detections are matched to tracks by nearest centre (within 25% of the frame); a face that is not
   matched opens a new track (snapped at first sight) and a track not seen this tick expires.
 * `face_smooth_ms = 0` disables smoothing (raw positions); larger values are smoother but lag more.
+* The three pose angles (`roll` from the eye axis, `yaw`/`pitch` from `solvePnP`) go through a
+  **One-Euro filter** instead of a fixed ease: slow motion is steady, fast motion keeps little lag.
+  This removes the per-detection jitter/spikes the raw `solvePnP` angles show. The filter is reset
+  when a track first appears.
 * Because easing happens at the render rate, the motion is smooth even though detection is slow.
 * The point's `radius` and `magnitude` are the animated values; because they are shared by all faces,
   the animation (including the accumulating `Add`) applies to **every** face at that point.

@@ -19,6 +19,7 @@
 #include <cmath>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
+#include <vector>
 
 namespace opa {
 
@@ -46,21 +47,34 @@ inline const std::array<cv::Point3f, 5> &headModel() {
 
 // landmarks: [0] right eye, [1] left eye, [2] nose tip, [3] right mouth, [4] left mouth - all in
 // detector pixel coordinates (origin top-left, y down).
-inline HeadPose estimateHeadPose(const std::array<cv::Point2f, 5> &landmarks, double imgW, double imgH) {
+inline HeadPose estimateHeadPose(const std::array<cv::Point2f, 5> &landmarks, double imgW, double imgH);
+
+// Generic N-point fit: the same 3D->2D correspondences as any landmark set (a dense model can feed
+// dozens of points, which is far more stable than the five YuNet points). EPNP is only the initial
+// guess; solvePnPRefineLM then refines it, which removes most of the instability EPNP shows on the
+// near-coplanar five-point case.
+inline HeadPose estimateHeadPosePoints(const std::vector<cv::Point3f> &modelPts,
+                                       const std::vector<cv::Point2f> &imagePts, double imgW,
+                                       double imgH) {
     HeadPose pose;
-    if (imgW <= 0.0 || imgH <= 0.0)
+    if (imgW <= 0.0 || imgH <= 0.0 || modelPts.size() < 4 || modelPts.size() != imagePts.size())
         return pose;
 
     const double focal = imgW; // focal length is unknown; the rotation is insensitive to it
-    const cv::Matx33d camera(focal, 0.0, imgW * 0.5, 0.0, focal, imgH * 0.5, 0.0, 0.0, 1.0);
+    const cv::Mat camera = (cv::Mat_<double>(3, 3) << focal, 0.0, imgW * 0.5, 0.0, focal, imgH * 0.5,
+                            0.0, 0.0, 1.0);
 
     cv::Vec3d rvec, tvec;
     bool ok = false;
     try {
         // EPNP works with as few as four points; SOLVEPNP_ITERATIVE would need six and throws.
-        ok = cv::solvePnP(std::vector<cv::Point3f>(headModel().begin(), headModel().end()),
-                          std::vector<cv::Point2f>(landmarks.begin(), landmarks.end()),
-                          cv::Mat(camera), cv::noArray(), rvec, tvec, false, cv::SOLVEPNP_EPNP);
+        ok = cv::solvePnP(modelPts, imagePts, camera, cv::noArray(), rvec, tvec, false,
+                          cv::SOLVEPNP_EPNP);
+        if (ok) {
+            // Refine the EPNP guess with Levenberg-Marquardt on the same correspondences. This is
+            // what makes the pose stable when the points are nearly coplanar.
+            cv::solvePnPRefineLM(modelPts, imagePts, camera, cv::noArray(), rvec, tvec);
+        }
     } catch (const cv::Exception &) {
         return pose; // degenerate landmarks (e.g. all points collinear)
     }
@@ -75,6 +89,12 @@ inline HeadPose estimateHeadPose(const std::array<cv::Point2f, 5> &landmarks, do
     pose.roll = std::atan2(R(1, 0), R(0, 0));
     pose.valid = true;
     return pose;
+}
+
+inline HeadPose estimateHeadPose(const std::array<cv::Point2f, 5> &landmarks, double imgW, double imgH) {
+    const std::vector<cv::Point3f> model(headModel().begin(), headModel().end());
+    const std::vector<cv::Point2f> image(landmarks.begin(), landmarks.end());
+    return estimateHeadPosePoints(model, image, imgW, imgH);
 }
 
 } // namespace opa

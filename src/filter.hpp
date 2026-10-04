@@ -1,6 +1,7 @@
 #pragma once
 #include "animation.hpp"
 #include "face_tracker.hpp"
+#include "one_euro.hpp"
 #include <array>
 #include <deque>
 #include <memory>
@@ -80,6 +81,9 @@ class Engine {
         double roll = 0;                                  // head in-plane rotation, radians
         double yaw = 0;                                   // head turn, radians
         double pitch = 0;                                 // head nod, radians
+        // One-Euro filters so the noisy per-detection angles do not make the pose (and the debug
+        // gizmo) jump around between detections. Reset when a track first appears.
+        OneEuroFilter rollF, yawF, pitchF;
         bool valid = false;
     };
     std::array<FaceTrack, maxFaces> tracks{};

@@ -7,6 +7,7 @@
 #include <thread>
 
 #ifdef OPA_FACE_TRACKING
+#include "face_mesh.hpp"
 #include "head_pose.hpp"
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -21,6 +22,7 @@ struct FaceTracker::Impl {
     FaceTrackerConfig cfg;
     std::string modelPath, error;
     bool available = false;
+    std::string meshOnnxPath, meshObjPath; // optional dense-landmark model + canonical 3D model
 
     // Pending frame: written by the render thread, consumed by the worker.
     std::mutex pendingMutex;
@@ -41,6 +43,9 @@ struct FaceTracker::Impl {
     uint64_t dropped = 0;
 
     std::thread worker;
+#ifdef OPA_FACE_TRACKING
+    FaceMesh mesh; // worker-thread only
+#endif
 
     Impl() {
 #ifdef OPA_FACE_TRACKING
@@ -80,6 +85,7 @@ struct FaceTracker::Impl {
             bool haveFrame = false;
             FaceTrackerConfig local;
             std::string path;
+            std::string meshOnnx, meshObj;
             bool rebuild = false;
             {
                 std::unique_lock<std::mutex> lock(pendingMutex);
@@ -102,7 +108,11 @@ struct FaceTracker::Impl {
                 std::lock_guard<std::mutex> lock(cfgMutex);
                 local = cfg;
                 path = modelPath;
+                meshOnnx = meshOnnxPath;
+                meshObj = meshObjPath;
             }
+            if (rebuild)
+                mesh.load(meshOnnx, meshObj); // no-op (returns false) when the paths are empty
             if (rebuild || (!detector && !path.empty())) {
                 detector = createDetector(path, local, loadError);
                 std::lock_guard<std::mutex> lock(cfgMutex);
@@ -135,54 +145,81 @@ struct FaceTracker::Impl {
                     const double rmx = f[10], rmy = f[11], lmx = f[12], lmy = f[13];
                     const auto pctX = [w](double X) { return std::clamp(X / w * 100.0, -50.0, 150.0); };
                     const auto pctY = [h](double Y) { return std::clamp(Y / h * 100.0, -50.0, 150.0); };
-                    // Keep the raw landmarks too, so feature-anchored morphs (eyes/nose/mouth) can
-                    // use them later; the three anchors below are derived from the same points.
-                    r.landmark[0] = {pctX(rex), pctY(rey)}; // right eye
-                    r.landmark[1] = {pctX(lex), pctY(ley)}; // left eye
-                    r.landmark[2] = {pctX(ntx), pctY(nty)}; // nose tip
-                    r.landmark[3] = {pctX(rmx), pctY(rmy)}; // right mouth corner
-                    r.landmark[4] = {pctX(lmx), pctY(lmy)}; // left mouth corner
-                    if (ntx >= 0.0 && lex >= 0.0 && rex >= 0.0) {
-                        r.landmarkValid = true;
-                        // Head roll = angle of the right-eye -> left-eye axis (0 when upright).
-                        r.roll = std::atan2(ley - rey, lex - rex);
-                        // Full head orientation: fit a generic 3D face model to the landmarks so
-                        // turn (yaw) and nod (pitch) follow too, not just the in-plane roll. Head
-                        // pose is optional, so a failure here must never drop the detection.
-                        try {
-                            const std::array<cv::Point2f, landmarkCount> lmPix = {
-                                cv::Point2f((float)rex, (float)rey),
-                                cv::Point2f((float)lex, (float)ley),
-                                cv::Point2f((float)ntx, (float)nty),
-                                cv::Point2f((float)rmx, (float)rmy),
-                                cv::Point2f((float)lmx, (float)lmy)};
-                            const HeadPose pose = estimateHeadPose(lmPix, (double)w, (double)h);
-                            r.yaw = pose.yaw;
-                            r.pitch = pose.pitch;
-                            r.poseValid = pose.valid;
-                        } catch (const std::exception &ex) {
-                            std::lock_guard<std::mutex> lock(cfgMutex);
-                            error = std::string("pose failed: ") + ex.what();
-                        } catch (...) {
-                            std::lock_guard<std::mutex> lock(cfgMutex);
-                            error = "pose failed: unknown exception";
+                    const auto pct = [&](const cv::Point2f &p) {
+                        return FacePoint{pctX(p.x), pctY(p.y)};
+                    };
+                    // Prefer the dense MediaPipe Face Mesh when its model is loaded: 468 landmarks put
+                    // the anchors exactly on the eyes / nose / mouth and give a far more stable head
+                    // pose than YuNet's five points.
+                    bool dense = false;
+                    if (mesh.available()) {
+                        const cv::Rect box(cvRound(f[0]), cvRound(f[1]), cvRound(f[2]),
+                                           cvRound(f[3]));
+                        FaceMesh::Result mr = mesh.run(bgr, box);
+                        if (mr.valid) {
+                            r.landmark[0] = pct(mr.eyeRight);
+                            r.landmark[1] = pct(mr.eyeLeft);
+                            r.landmark[2] = pct(mr.nose);
+                            r.landmark[3] = pct(mr.mouthRight);
+                            r.landmark[4] = pct(mr.mouthLeft);
+                            r.landmarkValid = true;
+                            r.anchor[0] = pct((mr.eyeRight + mr.eyeLeft) * 0.5f);
+                            r.anchor[1] = pct(mr.nose);
+                            r.anchor[2] = pct(mr.mouth);
+                            r.roll = std::atan2(mr.eyeLeft.y - mr.eyeRight.y,
+                                                mr.eyeLeft.x - mr.eyeRight.x);
+                            try {
+                                const HeadPose pose = estimateHeadPosePoints(
+                                    mr.canonical, mr.pts2d, (double)w, (double)h);
+                                r.yaw = pose.yaw;
+                                r.pitch = pose.pitch;
+                                r.poseValid = pose.valid;
+                            } catch (...) {
+                            }
+                            dense = true;
                         }
-                        // Anchored directly on the YuNet landmarks, so each point sits on the actual
-                        // facial feature (no extrapolation) and therefore follows the head's size,
-                        // tilt (roll) and turn (yaw/pitch) exactly as the features themselves do:
-                        //   [0] eyes  = midpoint of the two eyes
-                        //   [1] nose  = nose tip
-                        //   [2] mouth = midpoint of the two mouth corners
-                        const double emx = (rex + lex) * 0.5, emy = (rey + ley) * 0.5;
-                        const double mmx = (rmx + lmx) * 0.5, mmy = (rmy + lmy) * 0.5;
-                        r.anchor[0] = {pctX(emx), pctY(emy)}; // eyes
-                        r.anchor[1] = {pctX(ntx), pctY(nty)}; // nose
-                        r.anchor[2] = {pctX(mmx), pctY(mmy)}; // mouth
-                    } else {
-                        // Landmarks unavailable: fall back to fractions of the detection box.
-                        r.anchor[0] = {r.cx, std::clamp(r.cy - 0.45 * r.h, -50.0, 150.0)};
-                        r.anchor[1] = {r.cx, std::clamp(r.cy - 0.05 * r.h, -50.0, 150.0)};
-                        r.anchor[2] = {r.cx, std::clamp(r.cy + 0.72 * r.h, -50.0, 150.0)};
+                    }
+                    if (!dense) {
+                        // Fallback: YuNet's own five landmarks.
+                        r.landmark[0] = {pctX(rex), pctY(rey)}; // right eye
+                        r.landmark[1] = {pctX(lex), pctY(ley)}; // left eye
+                        r.landmark[2] = {pctX(ntx), pctY(nty)}; // nose tip
+                        r.landmark[3] = {pctX(rmx), pctY(rmy)}; // right mouth corner
+                        r.landmark[4] = {pctX(lmx), pctY(lmy)}; // left mouth corner
+                        if (ntx >= 0.0 && lex >= 0.0 && rex >= 0.0) {
+                            r.landmarkValid = true;
+                            // Head roll = angle of the right-eye -> left-eye axis (0 when upright).
+                            r.roll = std::atan2(ley - rey, lex - rex);
+                            try {
+                                const std::array<cv::Point2f, landmarkCount> lmPix = {
+                                    cv::Point2f((float)rex, (float)rey),
+                                    cv::Point2f((float)lex, (float)ley),
+                                    cv::Point2f((float)ntx, (float)nty),
+                                    cv::Point2f((float)rmx, (float)rmy),
+                                    cv::Point2f((float)lmx, (float)lmy)};
+                                const HeadPose pose = estimateHeadPose(lmPix, (double)w, (double)h);
+                                r.yaw = pose.yaw;
+                                r.pitch = pose.pitch;
+                                r.poseValid = pose.valid;
+                            } catch (const std::exception &ex) {
+                                std::lock_guard<std::mutex> lock(cfgMutex);
+                                error = std::string("pose failed: ") + ex.what();
+                            } catch (...) {
+                                std::lock_guard<std::mutex> lock(cfgMutex);
+                                error = "pose failed: unknown exception";
+                            }
+                            // Anchored directly on the landmarks: eyes (midpoint), nose, mouth.
+                            const double emx = (rex + lex) * 0.5, emy = (rey + ley) * 0.5;
+                            const double mmx = (rmx + lmx) * 0.5, mmy = (rmy + lmy) * 0.5;
+                            r.anchor[0] = {pctX(emx), pctY(emy)}; // eyes
+                            r.anchor[1] = {pctX(ntx), pctY(nty)}; // nose
+                            r.anchor[2] = {pctX(mmx), pctY(mmy)}; // mouth
+                        } else {
+                            // Landmarks unavailable: fall back to fractions of the detection box.
+                            r.anchor[0] = {r.cx, std::clamp(r.cy - 0.45 * r.h, -50.0, 150.0)};
+                            r.anchor[1] = {r.cx, std::clamp(r.cy - 0.05 * r.h, -50.0, 150.0)};
+                            r.anchor[2] = {r.cx, std::clamp(r.cy + 0.72 * r.h, -50.0, 150.0)};
+                        }
                     }
                     fresh.faces.push_back(r);
                 }
@@ -230,6 +267,22 @@ void FaceTracker::setModelPath(const std::string &path) {
     {
         std::lock_guard<std::mutex> lock(impl_->pendingMutex);
         impl_->wake = true; // (re-)create the detector even before any frame arrives
+    }
+    impl_->cv.notify_all();
+#endif
+}
+
+void FaceTracker::setMeshModelPaths(const std::string &onnxPath,
+                                    const std::string &canonicalObjPath) {
+    {
+        std::lock_guard<std::mutex> lock(impl_->cfgMutex);
+        impl_->meshOnnxPath = onnxPath;
+        impl_->meshObjPath = canonicalObjPath;
+    }
+#ifdef OPA_FACE_TRACKING
+    {
+        std::lock_guard<std::mutex> lock(impl_->pendingMutex);
+        impl_->wake = true;
     }
     impl_->cv.notify_all();
 #endif

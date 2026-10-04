@@ -311,9 +311,12 @@ void Engine::smoothFaces(const std::vector<FaceRect> &faces, double now) {
             for (int l = 0; l < landmarkCount; ++l)
                 tracks[t].landmarks[l] = f.landmark[l]; // snap on first appearance
             tracks[t].hasLandmarks = f.landmarkValid;
-            tracks[t].roll = f.roll;
-            tracks[t].yaw = f.yaw;
-            tracks[t].pitch = f.pitch;
+            tracks[t].rollF.reset();
+            tracks[t].yawF.reset();
+            tracks[t].pitchF.reset();
+            tracks[t].roll = tracks[t].rollF.filter(f.roll, dt);
+            tracks[t].yaw = tracks[t].yawF.filter(f.yaw, dt);
+            tracks[t].pitch = tracks[t].pitchF.filter(f.pitch, dt);
             tracks[t].valid = true;
         } else {
             auto &tr = tracks[t];
@@ -325,9 +328,11 @@ void Engine::smoothFaces(const std::vector<FaceRect> &faces, double now) {
                 tr.anchors[p].x += (f.anchor[p].x - tr.anchors[p].x) * alpha;
                 tr.anchors[p].y += (f.anchor[p].y - tr.anchors[p].y) * alpha;
             }
-            tr.roll += (f.roll - tr.roll) * alpha;
-            tr.yaw += (f.yaw - tr.yaw) * alpha;
-            tr.pitch += (f.pitch - tr.pitch) * alpha;
+            // Angles go through a One-Euro filter (adaptive smoothing) instead of a fixed ease, so
+            // slow motion is steady and fast motion does not lag.
+            tr.roll = tr.rollF.filter(f.roll, dt);
+            tr.yaw = tr.yawF.filter(f.yaw, dt);
+            tr.pitch = tr.pitchF.filter(f.pitch, dt);
             if (f.landmarkValid) {
                 if (!tr.hasLandmarks) {
                     // Landmarks just became available: snap instead of easing from a stale spot.
@@ -410,7 +415,7 @@ struct ShaderController {
     gs_effect_t *effect = nullptr;
     gs_eparam_t *zoneCount = nullptr, *zoneData = nullptr;
     gs_eparam_t *markerCount = nullptr, *markerData = nullptr;
-    gs_eparam_t *faceCount = nullptr, *faceBox = nullptr, *faceRoll = nullptr;
+    gs_eparam_t *faceCount = nullptr, *faceBox = nullptr, *faceRoll = nullptr, *faceLm = nullptr;
     gs_eparam_t *blurFaces = nullptr, *blurPx = nullptr, *debugPoints = nullptr;
     gs_eparam_t *animate = nullptr, *size = nullptr, *time = nullptr;
     std::shared_ptr<Engine> engine = std::make_shared<Engine>();
@@ -508,12 +513,13 @@ static void *create(obs_data_t *s, obs_source_t *source) {
     f->faceCount = gs_effect_get_param_by_name(f->effect, "face_count");
     f->faceBox = gs_effect_get_param_by_name(f->effect, "face_box");
     f->faceRoll = gs_effect_get_param_by_name(f->effect, "face_roll");
+    f->faceLm = gs_effect_get_param_by_name(f->effect, "face_lm");
     f->blurFaces = gs_effect_get_param_by_name(f->effect, "blur_faces");
     f->blurPx = gs_effect_get_param_by_name(f->effect, "blur_px");
     f->debugPoints = gs_effect_get_param_by_name(f->effect, "debug_points");
     if (!f->zoneCount || !f->zoneData || !f->animate || !f->size || !f->time || !f->markerCount ||
-        !f->markerData || !f->faceCount || !f->faceBox || !f->faceRoll || !f->blurFaces ||
-        !f->blurPx || !f->debugPoints) {
+        !f->markerData || !f->faceCount || !f->faceBox || !f->faceRoll || !f->faceLm ||
+        !f->blurFaces || !f->blurPx || !f->debugPoints) {
         blog(LOG_ERROR, "[OPA] Required shader uniforms missing");
         destroy(f);
         return nullptr;
@@ -525,6 +531,16 @@ static void *create(obs_data_t *s, obs_source_t *source) {
         f->engine->tracker->setModelPath(model);
         bfree(model);
     }
+    // Optional dense-landmark model: MediaPipe Face Mesh (ONNX) + its canonical 3D model. When both
+    // are present the anchors and pose come from 468 landmarks instead of YuNet's five points.
+    char *meshOnnx = obs_module_file("face_landmarks.onnx");
+    char *meshObj = obs_module_file("canonical_face_model.obj");
+    if (meshOnnx && meshObj)
+        f->engine->tracker->setMeshModelPaths(meshOnnx, meshObj);
+    if (meshOnnx)
+        bfree(meshOnnx);
+    if (meshObj)
+        bfree(meshObj);
     f->engine->configure(s);
     {
         std::lock_guard lock(registryMutex);
@@ -720,7 +736,8 @@ static void render(void *v, gs_effect_t *) {
     std::array<float, maxZones * 4> zones{};
     std::array<float, maxMarkers * 4> markers{}; // 3 anchors + 5 landmarks per face
     std::array<float, maxFaces * 4> boxes{};
-    std::array<float, maxFaces * 4> rolls{}; // per-face data; .x = head roll (radians)
+    std::array<float, maxFaces * 4> rolls{};  // per-face data; .x = roll, .y = yaw, .z = pitch
+    std::array<float, maxFaces * 12> faceLm{}; // per-face debug landmarks (3 float4 per face)
     int zoneCount = 0, markerCount = 0, faceCount = 0;
     {
         std::lock_guard lock(f.engine->mutex);
@@ -732,14 +749,35 @@ static void render(void *v, gs_effect_t *) {
             // Scale to the face: radius and offsets are then relative to the face height instead of
             // the frame, so a distant face gets proportionally smaller points.
             const double scale = faceScale ? std::clamp(tr.h / 100.0, 0.05, 3.0) : 1.0;
-            // Face boxes feed the blur option and the debug head-roll indicator.
+            // Face boxes and pose angles feed the blur option and the debug overlay.
             if ((effectBlur || effectDebug) && faceCount < maxFaces) {
                 float *b = boxes.data() + faceCount * 4;
                 b[0] = (float)tr.cx;
                 b[1] = (float)tr.cy;
                 b[2] = (float)tr.w;
                 b[3] = (float)tr.h;
-                rolls[faceCount * 4] = (float)tr.roll;
+                float *r = rolls.data() + faceCount * 4;
+                r[0] = (float)tr.roll;  // eye axis (in-plane roll)
+                r[1] = (float)tr.yaw;   // head turn
+                r[2] = (float)tr.pitch; // head nod
+                if (effectDebug) {
+                    // Raw landmark geometry for the debug overlay (eye axis, vertical axis, gizmo).
+                    float *lm = faceLm.data() + faceCount * 12; // 3 float4 per face
+                    const bool has = tr.hasLandmarks;
+                    const double zero = 0.0;
+                    lm[0] = (float)(has ? tr.landmarks[0].x : zero); // right eye x
+                    lm[1] = (float)(has ? tr.landmarks[0].y : zero);
+                    lm[2] = (float)(has ? tr.landmarks[1].x : zero); // left eye x
+                    lm[3] = (float)(has ? tr.landmarks[1].y : zero);
+                    lm[4] = (float)(has ? tr.landmarks[2].x : zero); // nose tip x
+                    lm[5] = (float)(has ? tr.landmarks[2].y : zero);
+                    lm[6] = (float)(has ? tr.landmarks[3].x : zero); // right mouth x
+                    lm[7] = (float)(has ? tr.landmarks[3].y : zero);
+                    lm[8] = (float)(has ? tr.landmarks[4].x : zero); // left mouth x
+                    lm[9] = (float)(has ? tr.landmarks[4].y : zero);
+                    lm[10] = has ? 1.0f : 0.0f; // landmarks available flag
+                    lm[11] = 0.0f;
+                }
                 ++faceCount;
             }
             for (int p = 0; p < pointCount; ++p) {
@@ -794,6 +832,7 @@ static void render(void *v, gs_effect_t *) {
     gs_effect_set_int(f.markerCount, markerCount);
     gs_effect_set_val(f.faceBox, boxes.data(), sizeof(float) * 4 * maxFaces);
     gs_effect_set_val(f.faceRoll, rolls.data(), sizeof(float) * 4 * maxFaces);
+    gs_effect_set_val(f.faceLm, faceLm.data(), sizeof(float) * 4 * maxFaces * 3);
     gs_effect_set_int(f.faceCount, faceCount);
     gs_effect_set_bool(f.blurFaces, effectBlur);
     gs_effect_set_float(f.blurPx, (float)faceBlurPx);
@@ -805,7 +844,7 @@ static void render(void *v, gs_effect_t *) {
     gs_effect_set_float(f.time, sine ? (float)elapsed : 0.0f);
     {
         std::lock_guard lock(f.engine->mutex);
-        f.engine->uniformCalls += 13;
+        f.engine->uniformCalls += 14;
     }
     obs_source_process_filter_end(f.source, f.effect, w, h);
 }

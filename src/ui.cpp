@@ -490,10 +490,13 @@ class AnimatorPanel : public QWidget {
         blurBox->setToolTip("Blur the whole detected face box (covers/anonimises the face). "
                             "Independent of the distortion.");
         debugBox = new QCheckBox("Debug points");
-        debugBox->setToolTip("Overlay the detected points: face-point anchors (red = eyes, green = "
-                             "nose, blue = mouth) and raw landmarks (yellow / cyan = eyes, magenta "
-                             "= nose tip, orange / violet = mouth corners). Independent of the "
-                             "distortion.");
+        debugBox->setToolTip("Overlay everything the tracker produced: the detection box, the eye "
+                             "axis (yellow - its angle is the head roll), the face vertical axis "
+                             "eye->nose->mouth (cyan), a head-pose gizmo at the nose (red = face "
+                             "right, green = face down, blue = into the scene) and the point anchors "
+                             "(red = eyes, green = nose, blue = mouth) plus the raw landmarks "
+                             "(yellow / cyan = eyes, magenta = nose tip, orange / violet = mouth "
+                             "corners). Independent of the distortion.");
         blurPxSpin = new QDoubleSpinBox;
         blurPxSpin->setRange(2, 128);
         blurPxSpin->setSuffix(" px");

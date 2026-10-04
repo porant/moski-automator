@@ -83,6 +83,18 @@ if(BUILD_PLUGIN)
           target_link_libraries(pose-tests PRIVATE ${OpenCV_LIBS})
         endif()
         add_test(NAME head-pose COMMAND pose-tests)
+        # Dense-landmark model smoke test (MediaPipe Face Mesh ONNX + canonical 3D model).
+        add_executable(mesh-tests tests/mesh_tests.cpp)
+        target_include_directories(mesh-tests PRIVATE src ${OpenCV_INCLUDE_DIRS})
+        target_compile_definitions(mesh-tests PRIVATE OPA_FACE_TRACKING=1)
+        if(OPA_OCV_LIB)
+          target_link_libraries(mesh-tests PRIVATE ${OPA_OCV_LIB})
+        else()
+          target_link_libraries(mesh-tests PRIVATE ${OpenCV_LIBS})
+        endif()
+        add_test(NAME face-mesh
+                 COMMAND mesh-tests "${CMAKE_CURRENT_SOURCE_DIR}/data/face_landmarks.onnx"
+                         "${CMAKE_CURRENT_SOURCE_DIR}/data/canonical_face_model.obj")
         # The test executable needs the OpenCV runtime next to it (the plugin only ships it on
         # install, so the test would otherwise fail to start with a missing-DLL dialog).
         if(TARGET opencv_world)
@@ -103,6 +115,9 @@ if(BUILD_PLUGIN)
               add_custom_command(TARGET pose-tests POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_opa_ocv_dllpath}"
                         "$<TARGET_FILE_DIR:pose-tests>")
+              add_custom_command(TARGET mesh-tests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_opa_ocv_dllpath}"
+                        "$<TARGET_FILE_DIR:mesh-tests>")
             endif()
           endif()
         endif()
