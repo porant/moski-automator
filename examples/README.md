@@ -182,6 +182,34 @@
 а `Copy all points` кладёт в буфер сразу три сообщения. Любое изменение контролов
 перегенерирует текст; сборкой строки занимается `src/json_builder.hpp`.
 
+## Вкладка Import / Export в док-панели
+
+Рядом с **JSON** есть вкладка **Import / Export**: она отдаёт **все настройки автоматизации**
+(режим, опции лиц/оверлея и три точки с их таймингами) одним JSON-текстом, который можно
+скопировать и вставить куда угодно. Текст — плоский объект с теми же ключами, что и настройки
+фильтра (`mode`, `face_tracking`, `face_smooth_ms`, `effect_blur`, `face_blur_px`, `effect_debug`,
+`face_scale`, `default_duration_ms`, `default_easing` и на каждую точку `pointN_enable`,
+`pointN_offset_x`, `pointN_offset_y`, `pointN_radius`, `pointN_magnitude`,
+`pointN_magnitude_min` / `_max`, `pointN_magnitude_duration_ms`, `pointN_magnitude_easing`,
+`pointN_magnitude_auto_return`, `pointN_magnitude_hold_ms`, `pointN_magnitude_return_ms`,
+`pointN_magnitude_return_easing`). Поэтому его можно вставить и в `filterSettings` сообщения
+`SetSourceFilterSettings` (как в `six-zones-settings.json`).
+
+- `Export from filter` — заполнить поле настройками выбранного фильтра (также заполняется
+  автоматически при смене фильтра в списке сверху);
+- `Copy` / `Paste` — обычная работа с буфером обмена;
+- `Apply` — разобрать текст и записать его в выбранный фильтр (позиции покоя пишутся вместе с
+  `_target` / `_return_value`, чтобы `Start` и авто-возврат пришли в импортированное состояние).
+
+Разбор терпим к ручным правкам: числа можно писать в кавычках, значения вне диапазона
+подрезаются, отсутствующие ключи сохраняют текущие значения, а вместо плоского пресета можно
+вставить целое сообщение OBS (`d` → `requestData` → `filterSettings`). Ошибка разбора
+показывается под полем. Сборкой и разбором текста занимается `src/preset.hpp` (тест
+`preset-import-export`).
+
+Отдельно в строке **Magnitude** (вкладка **Visual**) есть кнопка `Reset to 0`: она сбрасывает
+величину текущей точки в 0 — её состояние покоя.
+
 ## Ответы
 
 

@@ -131,6 +131,8 @@ Get-FileHash .\build\obs-parameter-animator.dll, .\stage\obs-plugins\64bit\obs-p
 - `src/ws_vendor.cpp` / `ws_vendor.hpp` — WebSocket Vendor API.
 - `src/zone_canvas.hpp` — чистый Qt-виджет превью зон (используется и в `tests/canvas_preview.cpp`).
 - `src/json_builder.hpp` — генератор CallVendorRequest-сообщений для вкладки JSON; тест `json-tests`.
+- `src/preset.hpp` — импорт/экспорт настроек автоматизации (вкладка Import / Export) в JSON-текст
+  для копипаста; тест `preset-import-export`.
 
 ## Конвенции и грабли
 
@@ -155,7 +157,7 @@ Get-FileHash .\build\obs-parameter-animator.dll, .\stage\obs-plugins\64bit\obs-p
   В списке должны быть `modeBox, blurBox, blurPxSpin, debugBox, scaleBox, faceBox, smoothSpin,
   pointBox, enabledBox, durSpin, easing, autoReturn, holdSpin, returnSpin, returnEasing, testParam,
   testValue, table, value, duration, tableEasing, returnToBase, metrics, logs, logFilter, pause,
-  jsonAction, jsonParam, jsonFormat, jsonValue,
+  jsonAction, jsonParam, jsonFormat, jsonValue, presetEdit, presetStatus,
   hint` (плюс `sl`/`sp` из `addRow` создают `cxSld/cySld/radSld/magSld` и `*Spin`, а
   `magBox` — `magMinSpin/magMaxSpin`).
 - Как быстро найти строку краха по crash-логу (через PDB, без отладчика): в crash-логе есть таблица

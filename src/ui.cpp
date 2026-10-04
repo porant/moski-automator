@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cmath>
 #include "json_builder.hpp"
+#include "preset.hpp"
 using namespace opa;
 
 // The dock edits the three face points (eyes / nose / mouth). Positions come from
@@ -59,6 +60,11 @@ class AnimatorPanel : public QWidget {
     QComboBox *jsonAction = nullptr, *jsonParam = nullptr, *jsonFormat = nullptr;
     QDoubleSpinBox *jsonValue = nullptr;
     std::array<QPlainTextEdit *, pointCount> jsonEdits{};
+
+    // Import / Export tab: the whole automation state as plain copy-pasteable JSON text.
+    QPlainTextEdit *presetEdit = nullptr;
+    QLabel *presetStatus = nullptr;
+    std::string presetUuid; // filter whose settings are currently shown, so a rescan cannot clobber edits
 
     QLabel *metrics = nullptr;
     QPlainTextEdit *logs = nullptr;
@@ -180,6 +186,13 @@ class AnimatorPanel : public QWidget {
         pull();
         refresh();
         generateJson();
+        // Refresh the Import / Export text only when the selected filter actually changed, so a
+        // background rescan cannot clobber text the user is still editing.
+        if (presetUuid != filterUuid) {
+            presetUuid = filterUuid;
+            fillPresetEdit();
+            presetStatus->setText(QString());
+        }
     }
     void reload() {
         std::string old = filterUuid;
@@ -285,6 +298,106 @@ class AnimatorPanel : public QWidget {
             obs_data_release(s);
         if (f)
             obs_source_release(f);
+    }
+    // ---- Import / Export: the dock's automation settings as copy-pasteable JSON text ----
+    // Reads the selected filter's settings into a Preset (what "Export from filter" writes out).
+    Preset readPreset() const {
+        Preset p;
+        obs_source_t *f = resolve();
+        if (!f)
+            return p;
+        obs_data_t *s = obs_source_get_settings(f);
+        p.mode = std::clamp<int>((int)obs_data_get_int(s, "mode"), 0, 2);
+        p.faceTracking = obs_data_get_bool(s, "face_tracking");
+        p.faceSmoothMs = obs_data_get_double(s, "face_smooth_ms");
+        p.effectBlur = obs_data_get_bool(s, "effect_blur");
+        p.faceBlurPx = obs_data_get_double(s, "face_blur_px");
+        p.effectDebug = obs_data_get_bool(s, "effect_debug");
+        p.faceScale = obs_data_get_bool(s, "face_scale");
+        p.defaultDurationMs = obs_data_get_double(s, "default_duration_ms");
+        p.defaultEasing = (int)obs_data_get_int(s, "default_easing");
+        for (int i = 0; i < pointCount; ++i) {
+            auto &pt = p.points[i];
+            const auto k = "point" + std::to_string(i + 1) + "_";
+            pt.enable = obs_data_get_bool(s, (k + "enable").c_str());
+            pt.offsetX = obs_data_get_double(s, (k + "offset_x").c_str());
+            pt.offsetY = obs_data_get_double(s, (k + "offset_y").c_str());
+            pt.radius = obs_data_get_double(s, (k + "radius").c_str());
+            pt.magnitude = obs_data_get_double(s, (k + "magnitude").c_str());
+            pt.magMin = obs_data_get_double(s, (k + "magnitude_min").c_str());
+            pt.magMax = obs_data_get_double(s, (k + "magnitude_max").c_str());
+            if (!(pt.magMax > pt.magMin)) {
+                pt.magMin = defaultMagnitudeMin;
+                pt.magMax = defaultMagnitudeMax;
+            }
+            const auto m = parameterName(i * pointParamCount + magnitudeParam);
+            pt.durationMs = obs_data_get_double(s, (m + "_duration_ms").c_str());
+            pt.easing = (int)obs_data_get_int(s, (m + "_easing").c_str());
+            pt.autoReturn = obs_data_get_bool(s, (m + "_auto_return").c_str());
+            pt.holdMs = obs_data_get_double(s, (m + "_hold_ms").c_str());
+            pt.returnMs = obs_data_get_double(s, (m + "_return_ms").c_str());
+            pt.returnEasing = (int)obs_data_get_int(s, (m + "_return_easing").c_str());
+        }
+        obs_data_release(s);
+        obs_source_release(f);
+        return p;
+    }
+    void fillPresetEdit() {
+        if (!presetEdit)
+            return;
+        presetEdit->setPlainText(presetToJson(readPreset()));
+    }
+    // Writes one point's move / return timing from an explicit preset (the import path). Same keys
+    // writeTimingLocked() writes, but taken from the preset instead of the current widgets.
+    void writeTimingPointLocked(obs_data_t *s, int index, const PresetPoint &t) {
+        const auto k = parameterName(index);
+        obs_data_set_double(s, (k + "_duration_ms").c_str(), t.durationMs);
+        obs_data_set_int(s, (k + "_easing").c_str(), t.easing);
+        obs_data_set_bool(s, (k + "_auto_return").c_str(), t.autoReturn);
+        obs_data_set_double(s, (k + "_hold_ms").c_str(), t.holdMs);
+        obs_data_set_double(s, (k + "_return_ms").c_str(), t.returnMs);
+        obs_data_set_int(s, (k + "_return_easing").c_str(), t.returnEasing);
+    }
+    // Applies a parsed preset to the selected filter: rest positions (plus their target / return
+    // mirrors, so Start and the automatic return land on the imported state), the per-point
+    // magnitude timing and the global options, then reloads the widgets.
+    void applyPreset(const Preset &p) {
+        obs_source_t *f = resolve();
+        if (!f) {
+            presetStatus->setText(
+                "No filter selected. Add the MoskiFaceDetector filter, then press Refresh.");
+            return;
+        }
+        for (int i = 0; i < pointCount; ++i) {
+            auto &v = points[i];
+            const auto &pt = p.points[i];
+            v.enabled = pt.enable;
+            v.cx = pt.offsetX;
+            v.cy = pt.offsetY;
+            v.radius = pt.radius;
+            v.magMin = pt.magMin;
+            v.magMax = pt.magMax;
+            v.magnitude = std::clamp(pt.magnitude, pt.magMin, pt.magMax);
+        }
+        obs_data_t *s = obs_source_get_settings(f);
+        writePositionLocked(s);
+        for (int i = 0; i < pointCount; ++i)
+            writeTimingPointLocked(s, i * pointParamCount + magnitudeParam, p.points[i]);
+        obs_data_set_int(s, "mode", p.mode);
+        obs_data_set_bool(s, "face_tracking", p.faceTracking);
+        obs_data_set_double(s, "face_smooth_ms", p.faceSmoothMs);
+        obs_data_set_bool(s, "effect_blur", p.effectBlur);
+        obs_data_set_double(s, "face_blur_px", p.faceBlurPx);
+        obs_data_set_bool(s, "effect_debug", p.effectDebug);
+        obs_data_set_bool(s, "face_scale", p.faceScale);
+        obs_data_set_double(s, "default_duration_ms", p.defaultDurationMs);
+        obs_data_set_int(s, "default_easing", p.defaultEasing);
+        obs_source_update(f, s);
+        obs_data_release(s);
+        obs_source_release(f);
+        pull();
+        refresh();
+        generateJson();
     }
     int testIndex() const { return pointBox->currentIndex() * pointParamCount + testParam->currentIndex(); }
     void test(const std::string &action) {
@@ -613,6 +726,10 @@ class AnimatorPanel : public QWidget {
         addRow(3, "Magnitude", "Distortion strength: above 0 bulges outwards, below 0 pinches "
                                "inwards. Default range -1.3333 to 1.3333; adjust min / max below.",
                magSld, magSpin, -1.3333, 1.3333, 1000, 3);
+        auto *magZero = new QPushButton("Reset to 0");
+        magZero->setFixedWidth(92);
+        magZero->setToolTip("Set this point's magnitude back to 0 (its resting value).");
+        grid->addWidget(magZero, 3, 3);
         auto magBox = [&](QDoubleSpinBox *&sp, const QString &tip) {
             sp = new QDoubleSpinBox;
             sp->setRange(-100, 100);
@@ -862,6 +979,41 @@ class AnimatorPanel : public QWidget {
         jl->addLayout(jsonButtons);
         tabs->addTab(jsonPage, "JSON");
 
+        // ============================ IMPORT / EXPORT ============================
+        // The whole automation state as plain JSON text: copy it out to share settings, or paste
+        // settings from another filter / machine and press Apply.
+        auto *presetPage = new QWidget;
+        auto *pl = new QVBoxLayout(presetPage);
+        auto *presetNote = new QLabel(
+            "Copy these automation settings to share them, or paste settings copied from another "
+            "filter and press Apply. The text is plain JSON, one flat object with the plugin's "
+            "setting names (mode, point1_offset_x, point1_magnitude, ...).");
+        presetNote->setWordWrap(true);
+        pl->addWidget(presetNote);
+        presetEdit = new QPlainTextEdit;
+        presetEdit->setPlaceholderText("Paste settings JSON here, then press Apply.");
+        presetEdit->setLineWrapMode(QPlainTextEdit::NoWrap);
+        pl->addWidget(presetEdit, 1);
+        auto *presetButtons = new QHBoxLayout;
+        auto *presetExport = new QPushButton("Export from filter");
+        presetExport->setToolTip("Fill the box with the selected filter's current settings.");
+        auto *presetCopy = new QPushButton("Copy");
+        presetCopy->setToolTip("Copy the text to the clipboard.");
+        auto *presetPaste = new QPushButton("Paste");
+        presetPaste->setToolTip("Replace the text with the clipboard contents.");
+        auto *presetApply = new QPushButton("Apply");
+        presetApply->setToolTip("Parse the text and write it into the selected filter.");
+        presetButtons->addWidget(presetExport);
+        presetButtons->addWidget(presetCopy);
+        presetButtons->addWidget(presetPaste);
+        presetButtons->addWidget(presetApply);
+        presetButtons->addStretch(1);
+        pl->addLayout(presetButtons);
+        presetStatus = new QLabel;
+        presetStatus->setWordWrap(true);
+        pl->addWidget(presetStatus);
+        tabs->addTab(presetPage, "Import / Export");
+
         // ============================ WIRING ============================
         connect(clear, &QPushButton::clicked, this, [this] {
             if (auto e = selected.lock()) {
@@ -888,6 +1040,24 @@ class AnimatorPanel : public QWidget {
                 if (e && !e->toPlainText().isEmpty())
                     parts << e->toPlainText();
             QApplication::clipboard()->setText(parts.join("\n"));
+        });
+        connect(presetExport, &QPushButton::clicked, this, [this] {
+            fillPresetEdit();
+            presetStatus->setText("Exported the selected filter's settings.");
+        });
+        connect(presetCopy, &QPushButton::clicked, this,
+                [this] { QApplication::clipboard()->setText(presetEdit->toPlainText()); });
+        connect(presetPaste, &QPushButton::clicked, this,
+                [this] { presetEdit->setPlainText(QApplication::clipboard()->text()); });
+        connect(presetApply, &QPushButton::clicked, this, [this] {
+            Preset p;
+            QString error;
+            if (!presetFromJson(presetEdit->toPlainText(), p, &error)) {
+                presetStatus->setText("Import failed: " + error);
+                return;
+            }
+            applyPreset(p);
+            presetStatus->setText("Settings applied to the selected filter.");
         });
         connect(filters, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { select(); });
         connect(pushTimer, &QTimer::timeout, this, [this] { pushSet(); });
@@ -992,6 +1162,14 @@ class AnimatorPanel : public QWidget {
         connect(magSld, &QSlider::valueChanged, this, [this, setter](int v) { if (!updating) setter(3, v / 1000.0); });
         connect(magSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, setter](double v) { if (!updating) setter(3, v); });
+        // "Reset to 0": put this point's magnitude back to its resting value (clamped to the point's
+        // configured min / max, in case 0 sits outside them).
+        connect(magZero, &QPushButton::clicked, this, [this] {
+            auto &a = points[pointBox->currentIndex()];
+            a.magnitude = std::clamp(0.0, a.magMin, a.magMax);
+            setPair(3, a.magnitude);
+            pushLater();
+        });
         // Magnitude min / max define the per-point clamp. Keep max > min inside the spin range,
         // re-clamp the stored magnitude, then refresh the slider / spin ranges to match.
         connect(magMinSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double v) {
