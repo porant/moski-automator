@@ -198,10 +198,12 @@ float4 mainImage(VertData v_in) : TARGET
             if (region > 0.0)
             {
                 float2 warped = correctedUV;
-                // Uniform-packing test build: only Big head is applied (its morph strength comes
-                // from the scalar uniform morph0 instead of a float array). This isolates whether
-                // the float-array uniform was what upset the driver.
                 warped = morphBigHead(warped, c, morph0);
+                warped = morphSquash(warped, c, morph1);
+                warped = morphSwirl(warped, c, bx, morph2);
+                warped = morphMelt(warped, c, bx, morph3);
+                warped = morphMirror(warped, c, morph4);
+                warped = morphTilt(warped, c, morph5);
                 correctedUV = lerp(correctedUV, warped, region);
             }
         }
