@@ -188,16 +188,16 @@ float4 mainImage(VertData v_in) : TARGET
         }
         // Head-roll indicator: a small "+" through each face centre, rotated by the head roll,
         // so the in-plane orientation of the face is visible (and shown to follow the head).
-        for (int i = 0; i < face_count; i++)
+        for (int f = 0; f < face_count; f++)
         {
-            float4 b = face_box[i];
+            float4 b = face_box[f];                       // b = (cx, cy, w, h), percent of frame
             float2 c = float2(b.x / 100.0, b.y / 100.0);
             c.x /= ar;
-            float R = max(b.w, 1.0) / 100.0 * 0.35;
-            float rol = face_roll[i];
+            float R = max(b.z, 1.0) / 100.0 * 0.35;       // b.z = face width
+            float rol = face_roll[f];
             float2 ax = float2(cos(rol), sin(rol)) * R;
             float2 ay = float2(-sin(rol), cos(rol)) * R;
-            float w = max(b.h, 1.0) / 100.0 * 0.02;
+            float w = max(b.w, 1.0) / 100.0 * 0.02;        // b.w = face height
             float m = max(segMask(correctedUV, c - ax, c + ax, w),
                           segMask(correctedUV, c - ay, c + ay, w));
             color.rgb = lerp(color.rgb, float3(1.0, 1.0, 0.15), m * 0.8);
