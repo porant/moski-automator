@@ -192,12 +192,10 @@ float4 mainImage(VertData v_in) : TARGET
             if (region > 0.0)
             {
                 float2 warped = correctedUV;
+                // BISECTION BUILD: only Big head is applied; the other morph functions are unused and
+                // get dead-code-eliminated, so the shader stays close to the original size. This
+                // isolates whether the full morph set is what upsets the GPU.
                 warped = morphBigHead(warped, c, morph_value[0]);
-                warped = morphSquash(warped, c, morph_value[1]);
-                warped = morphSwirl(warped, c, bx, morph_value[2]);
-                warped = morphMelt(warped, c, bx, morph_value[3]);
-                warped = morphMirror(warped, c, morph_value[4]);
-                warped = morphTilt(warped, c, morph_value[5]);
                 correctedUV = lerp(correctedUV, warped, region);
             }
         }
