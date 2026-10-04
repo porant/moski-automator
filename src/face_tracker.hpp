@@ -44,6 +44,10 @@ struct FaceRect {
     // Face in-plane rotation (roll) in radians, from the right-eye -> left-eye axis. 0 = upright,
     // positive = head tilted so the left eye goes down. Used to orient landmark-anchored morphs.
     double roll = 0;
+    // Head turn (yaw) and nod (pitch) in radians, from a solvePnP fit of the five landmarks.
+    double yaw = 0;
+    double pitch = 0;
+    bool poseValid = false;
 };
 
 struct FaceTrackerConfig {

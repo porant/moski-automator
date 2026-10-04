@@ -78,6 +78,8 @@ class Engine {
         std::array<FacePoint, landmarkCount> landmarks{}; // raw YuNet landmarks, smoothed like anchors
         bool hasLandmarks = false;                        // false when the detector used box fractions
         double roll = 0;                                  // head in-plane rotation, radians
+        double yaw = 0;                                   // head turn, radians
+        double pitch = 0;                                 // head nod, radians
         bool valid = false;
     };
     std::array<FaceTrack, maxFaces> tracks{};

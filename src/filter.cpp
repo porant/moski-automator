@@ -312,6 +312,8 @@ void Engine::smoothFaces(const std::vector<FaceRect> &faces, double now) {
                 tracks[t].landmarks[l] = f.landmark[l]; // snap on first appearance
             tracks[t].hasLandmarks = f.landmarkValid;
             tracks[t].roll = f.roll;
+            tracks[t].yaw = f.yaw;
+            tracks[t].pitch = f.pitch;
             tracks[t].valid = true;
         } else {
             auto &tr = tracks[t];
@@ -324,6 +326,8 @@ void Engine::smoothFaces(const std::vector<FaceRect> &faces, double now) {
                 tr.anchors[p].y += (f.anchor[p].y - tr.anchors[p].y) * alpha;
             }
             tr.roll += (f.roll - tr.roll) * alpha;
+            tr.yaw += (f.yaw - tr.yaw) * alpha;
+            tr.pitch += (f.pitch - tr.pitch) * alpha;
             if (f.landmarkValid) {
                 if (!tr.hasLandmarks) {
                     // Landmarks just became available: snap instead of easing from a stale spot.
@@ -684,33 +688,31 @@ static void render(void *v, gs_effect_t *) {
                 r = e.tracker->result();
             // Raw (unsmoothed) landmark of the first detection plus the smoothed track landmark,
             // so the log shows whether the detector updates them and whether the track follows.
-            double rx = 0, ry = 0, lx = 0, ly = 0, nx = 0, ny = 0, tx = 0, ty = 0;
-            double rroll = 0, troll = 0; // radians
-            bool lv = false, tvalid = false;
+            double rroll = 0, ryaw = 0, rpitch = 0;
+            double troll = 0, tyaw = 0, tpitch = 0; // radians
+            bool lv = false, rpose = false, tvalid = false;
             if (!r.faces.empty()) {
                 lv = r.faces[0].landmarkValid;
-                rx = r.faces[0].landmark[0].x;
-                ry = r.faces[0].landmark[0].y;
-                lx = r.faces[0].landmark[1].x;
-                ly = r.faces[0].landmark[1].y;
-                nx = r.faces[0].landmark[2].x;
-                ny = r.faces[0].landmark[2].y;
+                rpose = r.faces[0].poseValid;
                 rroll = r.faces[0].roll;
+                ryaw = r.faces[0].yaw;
+                rpitch = r.faces[0].pitch;
             }
             {
                 std::lock_guard lock(e.mutex);
                 tvalid = e.tracks[0].valid;
-                tx = e.tracks[0].landmarks[0].x;
-                ty = e.tracks[0].landmarks[0].y;
                 troll = e.tracks[0].roll;
+                tyaw = e.tracks[0].yaw;
+                tpitch = e.tracks[0].pitch;
             }
+            constexpr double kDeg = 57.29577951308232;
             blog(LOG_INFO,
                  "[OPA] face: tracking=%d available=%d faces=%d seq=%llu detect=%.1fms | RAW lmValid=%d "
-                 "reye=(%.1f,%.1f) leye=(%.1f,%.1f) nose=(%.1f,%.1f) roll=%+.1fdeg | TRACK valid=%d "
-                 "reye=(%.1f,%.1f) roll=%+.1fdeg",
+                 "poseValid=%d roll=%+.1f yaw=%+.1f pitch=%+.1f | TRACK valid=%d roll=%+.1f yaw=%+.1f "
+                 "pitch=%+.1f (deg)",
                  (int)e.faceTracking, (int)avail, (int)r.faces.size(), (unsigned long long)r.sequence,
-                 r.detectMs, (int)lv, rx, ry, lx, ly, nx, ny, rroll * 57.29577951308232, (int)tvalid,
-                 tx, ty, troll * 57.29577951308232);
+                 r.detectMs, (int)lv, (int)rpose, rroll * kDeg, ryaw * kDeg, rpitch * kDeg,
+                 (int)tvalid, troll * kDeg, tyaw * kDeg, tpitch * kDeg);
         }
     }
     // From the smoothed tracks build: distortion zones, debug markers and blur face boxes.

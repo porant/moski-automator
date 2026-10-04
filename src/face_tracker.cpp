@@ -7,6 +7,7 @@
 #include <thread>
 
 #ifdef OPA_FACE_TRACKING
+#include "head_pose.hpp"
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/objdetect/face.hpp>
@@ -145,6 +146,16 @@ struct FaceTracker::Impl {
                         r.landmarkValid = true;
                         // Head roll = angle of the right-eye -> left-eye axis (0 when upright).
                         r.roll = std::atan2(ley - rey, lex - rex);
+                        // Full head orientation: fit a generic 3D face model to the landmarks so
+                        // turn (yaw) and nod (pitch) follow too, not just the in-plane roll.
+                        const std::array<cv::Point2f, landmarkCount> lmPix = {
+                            cv::Point2f((float)rex, (float)rey), cv::Point2f((float)lex, (float)ley),
+                            cv::Point2f((float)ntx, (float)nty), cv::Point2f((float)rmx, (float)rmy),
+                            cv::Point2f((float)lmx, (float)lmy)};
+                        const HeadPose pose = estimateHeadPose(lmPix, (double)w, (double)h);
+                        r.yaw = pose.yaw;
+                        r.pitch = pose.pitch;
+                        r.poseValid = pose.valid;
                         // Face-local axes from the landmarks so the derived points follow head roll
                         // and pitch instead of always going straight up/down in frame space:
                         //   eyeMid - nose  = "up"   direction of the face
