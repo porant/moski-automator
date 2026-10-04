@@ -41,6 +41,9 @@ struct FaceRect {
     // (eyes / nose / mouth) and for the debug overlay.
     FacePoint landmark[landmarkCount];
     bool landmarkValid = false; // false when the detector fell back to box fractions
+    // Face in-plane rotation (roll) in radians, from the right-eye -> left-eye axis. 0 = upright,
+    // positive = head tilted so the left eye goes down. Used to orient landmark-anchored morphs.
+    double roll = 0;
 };
 
 struct FaceTrackerConfig {

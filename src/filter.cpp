@@ -311,6 +311,7 @@ void Engine::smoothFaces(const std::vector<FaceRect> &faces, double now) {
             for (int l = 0; l < landmarkCount; ++l)
                 tracks[t].landmarks[l] = f.landmark[l]; // snap on first appearance
             tracks[t].hasLandmarks = f.landmarkValid;
+            tracks[t].roll = f.roll;
             tracks[t].valid = true;
         } else {
             auto &tr = tracks[t];
@@ -322,6 +323,7 @@ void Engine::smoothFaces(const std::vector<FaceRect> &faces, double now) {
                 tr.anchors[p].x += (f.anchor[p].x - tr.anchors[p].x) * alpha;
                 tr.anchors[p].y += (f.anchor[p].y - tr.anchors[p].y) * alpha;
             }
+            tr.roll += (f.roll - tr.roll) * alpha;
             if (f.landmarkValid) {
                 if (!tr.hasLandmarks) {
                     // Landmarks just became available: snap instead of easing from a stale spot.
@@ -404,7 +406,7 @@ struct ShaderController {
     gs_effect_t *effect = nullptr;
     gs_eparam_t *zoneCount = nullptr, *zoneData = nullptr;
     gs_eparam_t *markerCount = nullptr, *markerData = nullptr;
-    gs_eparam_t *faceCount = nullptr, *faceBox = nullptr;
+    gs_eparam_t *faceCount = nullptr, *faceBox = nullptr, *faceRoll = nullptr;
     gs_eparam_t *blurFaces = nullptr, *blurPx = nullptr, *debugPoints = nullptr;
     gs_eparam_t *animate = nullptr, *size = nullptr, *time = nullptr;
     std::shared_ptr<Engine> engine = std::make_shared<Engine>();
@@ -501,12 +503,13 @@ static void *create(obs_data_t *s, obs_source_t *source) {
     f->markerData = gs_effect_get_param_by_name(f->effect, "marker_data");
     f->faceCount = gs_effect_get_param_by_name(f->effect, "face_count");
     f->faceBox = gs_effect_get_param_by_name(f->effect, "face_box");
+    f->faceRoll = gs_effect_get_param_by_name(f->effect, "face_roll");
     f->blurFaces = gs_effect_get_param_by_name(f->effect, "blur_faces");
     f->blurPx = gs_effect_get_param_by_name(f->effect, "blur_px");
     f->debugPoints = gs_effect_get_param_by_name(f->effect, "debug_points");
     if (!f->zoneCount || !f->zoneData || !f->animate || !f->size || !f->time || !f->markerCount ||
-        !f->markerData || !f->faceCount || !f->faceBox || !f->blurFaces || !f->blurPx ||
-        !f->debugPoints) {
+        !f->markerData || !f->faceCount || !f->faceBox || !f->faceRoll || !f->blurFaces ||
+        !f->blurPx || !f->debugPoints) {
         blog(LOG_ERROR, "[OPA] Required shader uniforms missing");
         destroy(f);
         return nullptr;
@@ -707,6 +710,7 @@ static void render(void *v, gs_effect_t *) {
     std::array<float, maxZones * 4> zones{};
     std::array<float, maxMarkers * 4> markers{}; // 3 anchors + 5 landmarks per face
     std::array<float, maxFaces * 4> boxes{};
+    std::array<float, maxFaces> rolls{}; // per-face head roll (radians)
     int zoneCount = 0, markerCount = 0, faceCount = 0;
     {
         std::lock_guard lock(f.engine->mutex);
@@ -718,14 +722,14 @@ static void render(void *v, gs_effect_t *) {
             // Scale to the face: radius and offsets are then relative to the face height instead of
             // the frame, so a distant face gets proportionally smaller points.
             const double scale = faceScale ? std::clamp(tr.h / 100.0, 0.05, 3.0) : 1.0;
-            // Face boxes feed the blur option. Filled only when it is on, so the plain
-            // point-distortion path behaves exactly as before.
-            if (effectBlur && faceCount < maxFaces) {
+            // Face boxes feed the blur option and the debug head-roll indicator.
+            if ((effectBlur || effectDebug) && faceCount < maxFaces) {
                 float *b = boxes.data() + faceCount * 4;
                 b[0] = (float)tr.cx;
                 b[1] = (float)tr.cy;
                 b[2] = (float)tr.w;
                 b[3] = (float)tr.h;
+                rolls[faceCount] = (float)tr.roll;
                 ++faceCount;
             }
             for (int p = 0; p < pointCount; ++p) {
@@ -779,6 +783,7 @@ static void render(void *v, gs_effect_t *) {
     gs_effect_set_val(f.markerData, markers.data(), sizeof(float) * 4 * maxMarkers);
     gs_effect_set_int(f.markerCount, markerCount);
     gs_effect_set_val(f.faceBox, boxes.data(), sizeof(float) * 4 * maxFaces);
+    gs_effect_set_val(f.faceRoll, rolls.data(), sizeof(float) * maxFaces);
     gs_effect_set_int(f.faceCount, faceCount);
     gs_effect_set_bool(f.blurFaces, effectBlur);
     gs_effect_set_float(f.blurPx, (float)faceBlurPx);
@@ -790,7 +795,7 @@ static void render(void *v, gs_effect_t *) {
     gs_effect_set_float(f.time, sine ? (float)elapsed : 0.0f);
     {
         std::lock_guard lock(f.engine->mutex);
-        f.engine->uniformCalls += 12;
+        f.engine->uniformCalls += 13;
     }
     obs_source_process_filter_end(f.source, f.effect, w, h);
 }

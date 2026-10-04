@@ -18,6 +18,7 @@ uniform bool blur_faces = false;
 uniform float blur_px = 24.0;
 uniform int face_count = 0;
 uniform float4 face_box[8];       // cx, cy, w, h (percent of frame)
+uniform float face_roll[8];       // head in-plane rotation (radians) per face, for orientation
 uniform bool debug_points = false;
 uniform int marker_count = 0;
 // x, y (centre %), z (size %), w (marker index): 0..2 = point anchors, 3..7 = raw landmarks.
@@ -103,6 +104,15 @@ float3 markerColor(int idx)
     return float3(0.7, 0.4, 1.0);      // left mouth      - violet
 }
 
+// Soft mask of a line segment a..b (used for the head-roll indicator).
+float segMask(float2 p, float2 a, float2 b, float w)
+{
+    float2 pa = p - a;
+    float2 ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.000001), 0.0, 1.0);
+    return 1.0 - smoothstep(0.0, w, length(pa - ba * h));
+}
+
 // ------------------------------------------------------------
 // MAIN
 // ------------------------------------------------------------
@@ -175,6 +185,22 @@ float4 mainImage(VertData v_in) : TARGET
             int idx = (int)m.w;
             float3 col = markerColor(idx);
             color.rgb = lerp(color.rgb, col, clamp(ring * 0.45 + dot, 0.0, 1.0));
+        }
+        // Head-roll indicator: a small "+" through each face centre, rotated by the head roll,
+        // so the in-plane orientation of the face is visible (and shown to follow the head).
+        for (int i = 0; i < face_count; i++)
+        {
+            float4 b = face_box[i];
+            float2 c = float2(b.x / 100.0, b.y / 100.0);
+            c.x /= ar;
+            float R = max(b.w, 1.0) / 100.0 * 0.35;
+            float rol = face_roll[i];
+            float2 ax = float2(cos(rol), sin(rol)) * R;
+            float2 ay = float2(-sin(rol), cos(rol)) * R;
+            float w = max(b.h, 1.0) / 100.0 * 0.02;
+            float m = max(segMask(correctedUV, c - ax, c + ax, w),
+                          segMask(correctedUV, c - ay, c + ay, w));
+            color.rgb = lerp(color.rgb, float3(1.0, 1.0, 0.15), m * 0.8);
         }
     }
 

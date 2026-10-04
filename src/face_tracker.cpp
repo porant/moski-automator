@@ -143,6 +143,8 @@ struct FaceTracker::Impl {
                     r.landmark[4] = {pctX(lmx), pctY(lmy)}; // left mouth corner
                     if (ntx >= 0.0 && lex >= 0.0 && rex >= 0.0) {
                         r.landmarkValid = true;
+                        // Head roll = angle of the right-eye -> left-eye axis (0 when upright).
+                        r.roll = std::atan2(ley - rey, lex - rex);
                         // Face-local axes from the landmarks so the derived points follow head roll
                         // and pitch instead of always going straight up/down in frame space:
                         //   eyeMid - nose  = "up"   direction of the face
