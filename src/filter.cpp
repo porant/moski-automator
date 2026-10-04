@@ -706,13 +706,14 @@ static void render(void *v, gs_effect_t *) {
                 tpitch = e.tracks[0].pitch;
             }
             constexpr double kDeg = 57.29577951308232;
+            const std::string terr = e.tracker ? e.tracker->lastError() : std::string();
             blog(LOG_INFO,
                  "[OPA] face: tracking=%d available=%d faces=%d seq=%llu detect=%.1fms | RAW lmValid=%d "
                  "poseValid=%d roll=%+.1f yaw=%+.1f pitch=%+.1f | TRACK valid=%d roll=%+.1f yaw=%+.1f "
-                 "pitch=%+.1f (deg)",
+                 "pitch=%+.1f (deg) err=\"%s\"",
                  (int)e.faceTracking, (int)avail, (int)r.faces.size(), (unsigned long long)r.sequence,
                  r.detectMs, (int)lv, (int)rpose, rroll * kDeg, ryaw * kDeg, rpitch * kDeg,
-                 (int)tvalid, troll * kDeg, tyaw * kDeg, tpitch * kDeg);
+                 (int)tvalid, troll * kDeg, tyaw * kDeg, tpitch * kDeg, terr.c_str());
         }
     }
     // From the smoothed tracks build: distortion zones, debug markers and blur face boxes.

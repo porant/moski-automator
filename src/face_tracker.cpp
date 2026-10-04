@@ -147,15 +147,26 @@ struct FaceTracker::Impl {
                         // Head roll = angle of the right-eye -> left-eye axis (0 when upright).
                         r.roll = std::atan2(ley - rey, lex - rex);
                         // Full head orientation: fit a generic 3D face model to the landmarks so
-                        // turn (yaw) and nod (pitch) follow too, not just the in-plane roll.
-                        const std::array<cv::Point2f, landmarkCount> lmPix = {
-                            cv::Point2f((float)rex, (float)rey), cv::Point2f((float)lex, (float)ley),
-                            cv::Point2f((float)ntx, (float)nty), cv::Point2f((float)rmx, (float)rmy),
-                            cv::Point2f((float)lmx, (float)lmy)};
-                        const HeadPose pose = estimateHeadPose(lmPix, (double)w, (double)h);
-                        r.yaw = pose.yaw;
-                        r.pitch = pose.pitch;
-                        r.poseValid = pose.valid;
+                        // turn (yaw) and nod (pitch) follow too, not just the in-plane roll. Head
+                        // pose is optional, so a failure here must never drop the detection.
+                        try {
+                            const std::array<cv::Point2f, landmarkCount> lmPix = {
+                                cv::Point2f((float)rex, (float)rey),
+                                cv::Point2f((float)lex, (float)ley),
+                                cv::Point2f((float)ntx, (float)nty),
+                                cv::Point2f((float)rmx, (float)rmy),
+                                cv::Point2f((float)lmx, (float)lmy)};
+                            const HeadPose pose = estimateHeadPose(lmPix, (double)w, (double)h);
+                            r.yaw = pose.yaw;
+                            r.pitch = pose.pitch;
+                            r.poseValid = pose.valid;
+                        } catch (const std::exception &ex) {
+                            std::lock_guard<std::mutex> lock(cfgMutex);
+                            error = std::string("pose failed: ") + ex.what();
+                        } catch (...) {
+                            std::lock_guard<std::mutex> lock(cfgMutex);
+                            error = "pose failed: unknown exception";
+                        }
                         // Face-local axes from the landmarks so the derived points follow head roll
                         // and pitch instead of always going straight up/down in frame space:
                         //   eyeMid - nose  = "up"   direction of the face
