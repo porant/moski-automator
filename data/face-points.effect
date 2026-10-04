@@ -230,11 +230,11 @@ float4 mainImage(VertData v_in) : TARGET
             c.x /= ar;
             float2 he = float2(b.z / 100.0 * 0.5, b.w / 100.0 * 0.5);
             he.x /= ar;
-            float lineW = max(b.w, 1.0) / 100.0 * 0.02;
+            float lineW = max(b.w, 1.0) / 100.0 * 0.006; // thin lines
 
             // 1) detection box outline
             color.rgb = lerp(color.rgb, float3(0.85, 0.85, 0.9),
-                             rectOutline(correctedUV, c, he, max(lineW, 0.002)) * 0.55);
+                             rectOutline(correctedUV, c, he, max(lineW, 0.0012)) * 0.5);
 
             float4 lm0 = face_lm[f * 3 + 0];
             float4 lm1 = face_lm[f * 3 + 1];

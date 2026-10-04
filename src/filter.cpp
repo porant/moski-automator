@@ -531,16 +531,6 @@ static void *create(obs_data_t *s, obs_source_t *source) {
         f->engine->tracker->setModelPath(model);
         bfree(model);
     }
-    // Optional dense-landmark model: MediaPipe Face Mesh (ONNX) + its canonical 3D model. When both
-    // are present the anchors and pose come from 468 landmarks instead of YuNet's five points.
-    char *meshOnnx = obs_module_file("face_landmarks.onnx");
-    char *meshObj = obs_module_file("canonical_face_model.obj");
-    if (meshOnnx && meshObj)
-        f->engine->tracker->setMeshModelPaths(meshOnnx, meshObj);
-    if (meshOnnx)
-        bfree(meshOnnx);
-    if (meshObj)
-        bfree(meshObj);
     f->engine->configure(s);
     {
         std::lock_guard lock(registryMutex);

@@ -71,10 +71,6 @@ class FaceTracker {
 
     // Path to the YuNet ONNX model. Must be set before the tracker can become available.
     void setModelPath(const std::string &path);
-    // Optional dense-landmark model (MediaPipe Face Mesh ONNX) + its canonical 3D model. When both
-    // load, the tracker uses the dense landmarks for the anchors and the head pose; otherwise it
-    // falls back to YuNet's five points.
-    void setMeshModelPaths(const std::string &onnxPath, const std::string &canonicalObjPath);
     void configure(const FaceTrackerConfig &cfg);
 
     // Copy one tightly-packed, top-down RGBA8 frame into the pending slot. Cheap and
