@@ -18,7 +18,9 @@ uniform bool blur_faces = false;
 uniform float blur_px = 24.0;
 uniform int face_count = 0;
 uniform float4 face_box[8];       // cx, cy, w, h (percent of frame)
-uniform float face_roll[8];       // head in-plane rotation (radians) per face, for orientation
+// Head in-plane rotation (roll, radians) per face. Stored in a float4 array on purpose: OBS' effect
+// framework mis-packs scalar arrays (float x[N]) and that corrupts neighbouring uniforms.
+uniform float4 face_roll[8];      // .x = roll (radians), rest unused
 uniform bool debug_points = false;
 uniform int marker_count = 0;
 // x, y (centre %), z (size %), w (marker index): 0..2 = point anchors, 3..7 = raw landmarks.
@@ -194,7 +196,7 @@ float4 mainImage(VertData v_in) : TARGET
             float2 c = float2(b.x / 100.0, b.y / 100.0);
             c.x /= ar;
             float R = max(b.z, 1.0) / 100.0 * 0.35;       // b.z = face width
-            float rol = face_roll[f];
+            float rol = face_roll[f].x;
             float2 ax = float2(cos(rol), sin(rol)) * R;
             float2 ay = float2(-sin(rol), cos(rol)) * R;
             float w = max(b.w, 1.0) / 100.0 * 0.02;        // b.w = face height

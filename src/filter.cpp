@@ -685,6 +685,7 @@ static void render(void *v, gs_effect_t *) {
             // Raw (unsmoothed) landmark of the first detection plus the smoothed track landmark,
             // so the log shows whether the detector updates them and whether the track follows.
             double rx = 0, ry = 0, nx = 0, ny = 0, tx = 0, ty = 0;
+            double rroll = 0, troll = 0; // radians
             bool lv = false, tvalid = false;
             if (!r.faces.empty()) {
                 lv = r.faces[0].landmarkValid;
@@ -692,25 +693,29 @@ static void render(void *v, gs_effect_t *) {
                 ry = r.faces[0].landmark[0].y;
                 nx = r.faces[0].landmark[2].x;
                 ny = r.faces[0].landmark[2].y;
+                rroll = r.faces[0].roll;
             }
             {
                 std::lock_guard lock(e.mutex);
                 tvalid = e.tracks[0].valid;
                 tx = e.tracks[0].landmarks[0].x;
                 ty = e.tracks[0].landmarks[0].y;
+                troll = e.tracks[0].roll;
             }
             blog(LOG_INFO,
                  "[OPA] face: tracking=%d available=%d faces=%d seq=%llu detect=%.1fms | RAW lmValid=%d "
-                 "reye=(%.1f,%.1f) nose=(%.1f,%.1f) | TRACK valid=%d reye=(%.1f,%.1f)",
+                 "reye=(%.1f,%.1f) nose=(%.1f,%.1f) roll=%+.1fdeg | TRACK valid=%d reye=(%.1f,%.1f) "
+                 "roll=%+.1fdeg",
                  (int)e.faceTracking, (int)avail, (int)r.faces.size(), (unsigned long long)r.sequence,
-                 r.detectMs, (int)lv, rx, ry, nx, ny, (int)tvalid, tx, ty);
+                 r.detectMs, (int)lv, rx, ry, nx, ny, rroll * 57.29577951308232, (int)tvalid, tx, ty,
+                 troll * 57.29577951308232);
         }
     }
     // From the smoothed tracks build: distortion zones, debug markers and blur face boxes.
     std::array<float, maxZones * 4> zones{};
     std::array<float, maxMarkers * 4> markers{}; // 3 anchors + 5 landmarks per face
     std::array<float, maxFaces * 4> boxes{};
-    std::array<float, maxFaces> rolls{}; // per-face head roll (radians)
+    std::array<float, maxFaces * 4> rolls{}; // per-face data; .x = head roll (radians)
     int zoneCount = 0, markerCount = 0, faceCount = 0;
     {
         std::lock_guard lock(f.engine->mutex);
@@ -729,7 +734,7 @@ static void render(void *v, gs_effect_t *) {
                 b[1] = (float)tr.cy;
                 b[2] = (float)tr.w;
                 b[3] = (float)tr.h;
-                rolls[faceCount] = (float)tr.roll;
+                rolls[faceCount * 4] = (float)tr.roll;
                 ++faceCount;
             }
             for (int p = 0; p < pointCount; ++p) {
@@ -783,7 +788,7 @@ static void render(void *v, gs_effect_t *) {
     gs_effect_set_val(f.markerData, markers.data(), sizeof(float) * 4 * maxMarkers);
     gs_effect_set_int(f.markerCount, markerCount);
     gs_effect_set_val(f.faceBox, boxes.data(), sizeof(float) * 4 * maxFaces);
-    gs_effect_set_val(f.faceRoll, rolls.data(), sizeof(float) * maxFaces);
+    gs_effect_set_val(f.faceRoll, rolls.data(), sizeof(float) * 4 * maxFaces);
     gs_effect_set_int(f.faceCount, faceCount);
     gs_effect_set_bool(f.blurFaces, effectBlur);
     gs_effect_set_float(f.blurPx, (float)faceBlurPx);
