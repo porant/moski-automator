@@ -516,11 +516,13 @@ static void *create(obs_data_t *s, obs_source_t *source) {
     f->blurFaces = gs_effect_get_param_by_name(f->effect, "blur_faces");
     f->blurPx = gs_effect_get_param_by_name(f->effect, "blur_px");
     f->debugPoints = gs_effect_get_param_by_name(f->effect, "debug_points");
-    f->morphValue = gs_effect_get_param_by_name(f->effect, "morph_value");
-    f->morphCount = gs_effect_get_param_by_name(f->effect, "morph_count");
+    // Diagnostic build: the effect currently has NO meme-morph uniforms, so morph uploads are
+    // skipped. This isolates whether the morph shader block was responsible for GPU resets.
+    f->morphValue = nullptr;
+    f->morphCount = nullptr;
     if (!f->zoneCount || !f->zoneData || !f->animate || !f->size || !f->time || !f->markerCount ||
         !f->markerData || !f->faceCount || !f->faceBox || !f->blurFaces || !f->blurPx ||
-        !f->debugPoints || !f->morphValue || !f->morphCount) {
+        !f->debugPoints) {
         blog(LOG_ERROR, "[OPA] Required shader uniforms missing");
         destroy(f);
         return nullptr;
@@ -757,9 +759,11 @@ static void render(void *v, gs_effect_t *) {
     gs_effect_set_bool(f.blurFaces, effectBlur);
     gs_effect_set_float(f.blurPx, (float)faceBlurPx);
     gs_effect_set_bool(f.debugPoints, effectDebug);
-    gs_effect_set_val(f.morphValue, morphVal.data(), sizeof(float) * morphCount);
+    if (f.morphValue)
+        gs_effect_set_val(f.morphValue, morphVal.data(), sizeof(float) * morphCount);
     // The shader only warps faces when a morph is active, so morphs cost nothing when off.
-    gs_effect_set_int(f.morphCount, morphActive ? faceCount : 0);
+    if (f.morphCount)
+        gs_effect_set_int(f.morphCount, morphActive ? faceCount : 0);
     gs_effect_set_bool(f.animate, sine);
     vec2 size;
     vec2_set(&size, (float)w, (float)h);

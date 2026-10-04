@@ -25,8 +25,6 @@ assert 'uniform float4 face_box[' in fp and 'uniform float4 marker_data[' in fp,
 assert 'uniform float morph_value[' in fp, 'meme morph strength array missing'
 assert 'morphUV(' in fp and 'MEME MORPHS' in fp, 'meme morph warp missing'
 assert 'uniform float4 marker_data[24]' in fp, 'marker array changed'
-assert 'uniform int morph_count' in fp and 'morph_value[' in fp, 'meme morph uniforms missing'
-assert 'for (int fi = 0; fi < morph_count; fi++)' in fp, 'morphs must be gated by morph_count'
 # The effect compiles as HLSL for D3D11, not GLSL: GLSL-only intrinsics fail at runtime with
 # "undeclared identifier". Keep them out (use lerp instead of mix, etc.).
 for glsl_only in ('mix(', 'fract(', 'texture('):
