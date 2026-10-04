@@ -293,7 +293,7 @@ inline int parameterIndex(const std::string &name) {
 }
 // Human-readable name of a point (0 eyes, 1 nose, 2 mouth).
 inline const char *pointName(int point) {
-    constexpr const char *names[pointCount] = {"Eyes", "Nose", "Mouth"};
+    constexpr const char *names[pointCount] = {"Forehead", "Nose", "Mouth"};
     return (point >= 0 && point < pointCount) ? names[point] : "?";
 }
 } // namespace opa

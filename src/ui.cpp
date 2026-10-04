@@ -22,6 +22,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <cmath>
+#include "json_builder.hpp"
 using namespace opa;
 
 // The dock edits the three face points (eyes / nose / mouth). Positions come from
@@ -52,6 +54,11 @@ class AnimatorPanel : public QWidget {
     QDoubleSpinBox *value = nullptr, *duration = nullptr;
     QCheckBox *returnToBase = nullptr;
     QComboBox *tableEasing = nullptr;
+
+    // JSON tab: one ready-to-copy CallVendorRequest per point, mirrored from the filter settings.
+    QComboBox *jsonAction = nullptr, *jsonParam = nullptr, *jsonFormat = nullptr;
+    QDoubleSpinBox *jsonValue = nullptr;
+    std::array<QPlainTextEdit *, pointCount> jsonEdits{};
 
     QLabel *metrics = nullptr;
     QPlainTextEdit *logs = nullptr;
@@ -172,6 +179,7 @@ class AnimatorPanel : public QWidget {
         }
         pull();
         refresh();
+        generateJson();
     }
     void reload() {
         std::string old = filterUuid;
@@ -215,6 +223,68 @@ class AnimatorPanel : public QWidget {
         obs_source_update(f, s);
         obs_data_release(s);
         obs_source_release(f);
+        generateJson();
+    }
+
+    // Build one ready-to-copy CallVendorRequest per point. Every message uses the source + filter
+    // of the selected filter and the point's OWN saved settings (duration / easing / auto-return),
+    // so the JSON matches what the dock and the vendor actually run.
+    void generateJson() {
+        static const char *const actionNames[] = {"Add", "Set", "Start", "Reset", "Stop"};
+        const int actionIndex = std::clamp(jsonAction->currentIndex(), 0, 4);
+        const QString vendorType = QString::fromLatin1(actionNames[actionIndex]);
+        const int paramIndex = std::clamp(jsonParam->currentIndex(), 0, pointParamCount - 1);
+        const bool withValue = actionIndex == 0 || actionIndex == 1; // Add / Set carry a value
+        const bool full = jsonFormat->currentIndex() == 1;           // default: vendor request (d)
+
+        std::string source, filter;
+        for (const auto &entry : entries)
+            if (!filterUuid.empty() && entry.filterUuid == filterUuid) {
+                source = entry.source;
+                filter = entry.filter;
+                break;
+            }
+
+        obs_source_t *f = resolve();
+        obs_data_t *s = f ? obs_source_get_settings(f) : nullptr;
+        const double defMs = s ? obs_data_get_double(s, "default_duration_ms") : 1000.0;
+        const int defEase = s ? (int)obs_data_get_int(s, "default_easing") : 5;
+
+        for (int p = 0; p < pointCount; ++p) {
+            const std::string key = parameterName(p * pointParamCount + paramIndex);
+            double ms = s ? obs_data_get_double(s, (key + "_duration_ms").c_str()) : -1;
+            if (!std::isfinite(ms) || ms < 0)
+                ms = defMs;
+            int ease = s ? (int)obs_data_get_int(s, (key + "_easing").c_str()) : -1;
+            if (ease < 0)
+                ease = defEase;
+            ease = std::clamp(ease, 0, 30);
+            // Per-point auto-return (mirrored into the "returnToZero" field of the request).
+            const bool returnToZero = s ? obs_data_get_bool(s, (key + "_auto_return").c_str()) : false;
+
+            QStringList fields;
+            fields << "\"source\": \"" + jsonEscape(QString::fromStdString(source)) + "\"";
+            fields << "\"filter\": \"" + jsonEscape(QString::fromStdString(filter)) + "\"";
+            fields << "\"parameter\": \"" + QString::fromStdString(key) + "\"";
+            if (withValue)
+                fields << "\"value\": " + jsonNum(jsonValue->value());
+            fields << "\"durationMs\": " + jsonNum(ms);
+            fields << "\"easing\": \"" + QString::fromLatin1(easingNames[ease]) + "\"";
+            fields << "\"returnToZero\": " + QString(returnToZero ? "true" : "false");
+
+            const QString requestId =
+                QStringLiteral("point%1-%2").arg(p + 1).arg(vendorType.toLower());
+            const QString text =
+                filterUuid.empty()
+                    ? QStringLiteral("No filter selected. Pick a filter above, then press Regenerate.")
+                    : vendorMessage(full, requestId, vendorType, fields);
+            if (jsonEdits[p] && jsonEdits[p]->toPlainText() != text)
+                jsonEdits[p]->setPlainText(text);
+        }
+        if (s)
+            obs_data_release(s);
+        if (f)
+            obs_source_release(f);
     }
     int testIndex() const { return pointBox->currentIndex() * pointParamCount + testParam->currentIndex(); }
     void test(const std::string &action) {
@@ -222,7 +292,7 @@ class AnimatorPanel : public QWidget {
             auto e = selected.lock();
             if (!e)
                 throw std::runtime_error(
-                    "No filter selected. Add the Face Points filter to a source, then press Refresh.");
+                    "No filter selected. Add the MoskiFaceDetector filter to a source, then press Refresh.");
             if (obs_source_t *f = resolve()) {
                 obs_data_t *s = obs_source_get_settings(f);
                 writePositionLocked(s);
@@ -234,7 +304,7 @@ class AnimatorPanel : public QWidget {
             e->command(testIndex(), action, testValue->value(), durSpin->value() / 1000.0,
                        easing->currentIndex(), -1);
         } catch (const std::exception &ex) {
-            QMessageBox::warning(this, "Parameter Animator", ex.what());
+            QMessageBox::warning(this, "MoskiAutomator", ex.what());
         }
         refresh();
     }
@@ -243,7 +313,7 @@ class AnimatorPanel : public QWidget {
             auto e = selected.lock();
             if (!e)
                 throw std::runtime_error(
-                    "No filter selected. Add the Face Points filter to a source, then press Refresh.");
+                    "No filter selected. Add the MoskiFaceDetector filter to a source, then press Refresh.");
             if (action == "StartAll")
                 e->startAll();
             else if (action == "StopAll")
@@ -258,7 +328,7 @@ class AnimatorPanel : public QWidget {
                            tableEasing->currentIndex(), returnToBase->isChecked() ? 1 : 0);
             }
         } catch (const std::exception &ex) {
-            QMessageBox::warning(this, "Parameter Animator", ex.what());
+            QMessageBox::warning(this, "MoskiAutomator", ex.what());
         }
         refresh();
     }
@@ -271,7 +341,7 @@ class AnimatorPanel : public QWidget {
             for (int k = 0; k < pointParamCount; ++k)
                 e->command(p * pointParamCount + k, "Start");
         } catch (const std::exception &ex) {
-            QMessageBox::warning(this, "Parameter Animator", ex.what());
+            QMessageBox::warning(this, "MoskiAutomator", ex.what());
         }
         refresh();
     }
@@ -282,7 +352,7 @@ class AnimatorPanel : public QWidget {
         auto e = selected.lock();
         if (!e) {
             const QString msg = QStringLiteral(
-                "No filter selected. Add the Face Points filter to a source, then press Refresh.");
+                "No filter selected. Add the MoskiFaceDetector filter to a source, then press Refresh.");
             if (metrics->text() != msg)
                 metrics->setText(msg);
             if (table->item(0, 0))
@@ -394,7 +464,7 @@ class AnimatorPanel : public QWidget {
         setPair(3, v.magnitude);
         enabledBox->setChecked(v.enabled);
         const QString hintText = QStringLiteral(
-            "Positions are detected on every face (eyes / nose / mouth). Offset nudges the point "
+            "Positions are detected on every face (forehead / nose / mouth). Offset nudges the point "
             "(percent of the frame), radius is a percent of the frame height, magnitude is the "
             "distortion strength. Magnitude min / max clamp how far this point's magnitude may "
             "travel. The slider and the box always show the same value; Add / Set / Start animate "
@@ -448,7 +518,7 @@ class AnimatorPanel : public QWidget {
         fg->setSpacing(4);
         auto *faceRow = new QHBoxLayout;
         faceBox = new QCheckBox("Track faces");
-        faceBox->setToolTip("Detect faces and place the three points (eyes / nose / mouth) on each "
+        faceBox->setToolTip("Detect faces and place the three points (forehead / nose / mouth) on each "
                             "of them.");
         faceRow->addWidget(faceBox);
         faceRow->addWidget(new QLabel("Smoothing"));
@@ -485,7 +555,7 @@ class AnimatorPanel : public QWidget {
         renderRow->addWidget(blurPxSpin);
         renderRow->addSpacing(12);
         debugBox = new QCheckBox("Debug points");
-        debugBox->setToolTip("Overlay the detection box and the three point anchors: red = eyes, "
+        debugBox->setToolTip("Overlay the detection box and the three point anchors: red = forehead, "
                              "green = nose, blue = mouth. Independent of the distortion.");
         renderRow->addWidget(debugBox);
         renderRow->addStretch(1);
@@ -508,7 +578,7 @@ class AnimatorPanel : public QWidget {
         pointBox = new QComboBox;
         for (int p = 0; p < pointCount; ++p)
             pointBox->addItem(pointName(p));
-        pointBox->setToolTip("Which landmark point to edit: 1 = Eyes, 2 = Nose, 3 = Mouth.");
+        pointBox->setToolTip("Which landmark point to edit: 1 = Forehead, 2 = Nose, 3 = Mouth.");
         prow->addWidget(pointBox);
         enabledBox = new QCheckBox("Draw this point");
         enabledBox->setToolTip("Draw the point on every detected face.");
@@ -723,6 +793,75 @@ class AnimatorPanel : public QWidget {
         ll->addWidget(logs, 1);
         tabs->addTab(logPage, "Log");
 
+        // ============================ JSON ============================
+        // One ready-to-paste CallVendorRequest per point, built from the selected source + filter
+        // and each point's saved move duration / easing / auto-return settings.
+        auto *jsonPage = new QWidget;
+        auto *jl = new QVBoxLayout(jsonPage);
+        auto *jsonTop = new QHBoxLayout;
+        jsonAction = new QComboBox;
+        jsonAction->addItems({"Add", "Set", "Start", "Reset", "Stop"});
+        jsonAction->setToolTip("Vendor requestType written into every message.");
+        jsonTop->addWidget(new QLabel("Action"));
+        jsonTop->addWidget(jsonAction);
+        jsonParam = new QComboBox;
+        for (const char *n : {"Enable", "Offset X", "Offset Y", "Radius", "Magnitude"})
+            jsonParam->addItem(n);
+        jsonParam->setCurrentIndex(4);
+        jsonParam->setToolTip("Which of the five per-point parameters the messages animate.");
+        jsonTop->addWidget(new QLabel("Parameter"));
+        jsonTop->addWidget(jsonParam);
+        jsonValue = new QDoubleSpinBox;
+        jsonValue->setRange(-100, 100);
+        jsonValue->setDecimals(4);
+        jsonValue->setSingleStep(0.05);
+        jsonValue->setValue(0.3);
+        jsonValue->setFixedWidth(96);
+        jsonValue->setToolTip("Delta for Add / absolute value for Set; unused by Start, Stop, Reset.");
+        jsonTop->addWidget(new QLabel("Value / delta"));
+        jsonTop->addWidget(jsonValue);
+        jsonFormat = new QComboBox;
+        jsonFormat->addItems({"Vendor request (d)", "Full message (op 6)"});
+        jsonFormat->setToolTip("Vendor request (d): the inner CallVendorRequest object that "
+                               "Streamer.bot accepts as-is (default, no op / requestId). Full "
+                               "message: the whole op:6 OBS WebSocket message.");
+        jsonTop->addWidget(new QLabel("Format"));
+        jsonTop->addWidget(jsonFormat);
+        jsonTop->addStretch(1);
+        jl->addLayout(jsonTop);
+        auto *jsonNote = new QLabel(
+            "One message per point, using the selected source + filter and each point's saved "
+            "move duration, easing and auto-return (returnToZero). Edit any control to regenerate, "
+            "then press Copy to grab a single point or Copy all points for all three.");
+        jsonNote->setWordWrap(true);
+        jl->addWidget(jsonNote);
+        for (int p = 0; p < pointCount; ++p) {
+            auto *group = new QGroupBox(QString("%1 (point%2)")
+                                            .arg(QString::fromLatin1(pointName(p)))
+                                            .arg(p + 1));
+            auto *gv = new QVBoxLayout(group);
+            auto *row = new QHBoxLayout;
+            jsonEdits[p] = new QPlainTextEdit;
+            jsonEdits[p]->setReadOnly(true);
+            jsonEdits[p]->setMinimumHeight(150);
+            row->addWidget(jsonEdits[p], 1);
+            auto *copyJson = new QPushButton("Copy");
+            copyJson->setToolTip("Copy this point's message to the clipboard.");
+            row->addWidget(copyJson);
+            connect(copyJson, &QPushButton::clicked, this,
+                    [this, p] { QApplication::clipboard()->setText(jsonEdits[p]->toPlainText()); });
+            gv->addLayout(row);
+            jl->addWidget(group, 1);
+        }
+        auto *jsonButtons = new QHBoxLayout;
+        auto *regenJson = new QPushButton("Regenerate");
+        auto *copyAllJson = new QPushButton("Copy all points");
+        jsonButtons->addWidget(regenJson);
+        jsonButtons->addWidget(copyAllJson);
+        jsonButtons->addStretch(1);
+        jl->addLayout(jsonButtons);
+        tabs->addTab(jsonPage, "JSON");
+
         // ============================ WIRING ============================
         connect(clear, &QPushButton::clicked, this, [this] {
             if (auto e = selected.lock()) {
@@ -734,6 +873,22 @@ class AnimatorPanel : public QWidget {
         connect(copy, &QPushButton::clicked, this,
                 [this] { QApplication::clipboard()->setText(logs->toPlainText()); });
         connect(refreshBtn, &QPushButton::clicked, this, [this] { reload(); });
+        connect(jsonAction, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this](int) { generateJson(); });
+        connect(jsonParam, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this](int) { generateJson(); });
+        connect(jsonFormat, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this](int) { generateJson(); });
+        connect(jsonValue, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this](double) { generateJson(); });
+        connect(regenJson, &QPushButton::clicked, this, [this] { generateJson(); });
+        connect(copyAllJson, &QPushButton::clicked, this, [this] {
+            QStringList parts;
+            for (auto *e : jsonEdits)
+                if (e && !e->toPlainText().isEmpty())
+                    parts << e->toPlainText();
+            QApplication::clipboard()->setText(parts.join("\n"));
+        });
         connect(filters, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { select(); });
         connect(pushTimer, &QTimer::timeout, this, [this] { pushSet(); });
         connect(pointBox, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {

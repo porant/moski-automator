@@ -166,6 +166,22 @@
 (`face_tracking` / запрос `FaceTrack`), `pointN_enable = true`, `pointN_radius > 0`
 и `pointN_magnitude != 0`.
 
+## Вкладка JSON в док-панели
+
+В док-панели есть вкладка **JSON**: она генерирует готовое к копированию сообщение
+`CallVendorRequest` **на каждую точку** (Forehead / Nose / Mouth). В сообщении подставляются
+реальные `source` и `filter` выбранного фильтра и **собственные настройки точки** —
+`_duration_ms`, `_easing` и `_auto_return` — поэтому длина, плавность и возврат совпадают с
+тем, что реально выполнит вендор.
+
+Сверху выбирают `Action` (Add / Set / Start / Reset / Stop), `Parameter`
+(Enable / Offset X / Offset Y / Radius / Magnitude) и `Value / delta` (для Add / Set), а также
+формат. По умолчанию — `Vendor request (d)`: внутренний объект `d` **без** `op` и `requestId`,
+ровно в том виде, который Streamer.bot принимает как тело custom OBS request. Второй вариант,
+`Full message (op 6)`, — целое сообщение протокола OBS WebSocket. У каждой точки своя кнопка `Copy`,
+а `Copy all points` кладёт в буфер сразу три сообщения. Любое изменение контролов
+перегенерирует текст; сборкой строки занимается `src/json_builder.hpp`.
+
 ## Ответы
 
 

@@ -107,7 +107,7 @@ Global (filter properties, **Face tracking** group):
 Top-level (not part of the Face tracking group): `effect_blur` + `face_blur_px` and `effect_debug`
 are independent options - see **Independent effects** above.
 
-Per point (three groups: **Eyes**, **Nose**, **Mouth**). Names are `point1_*`,
+Per point (three groups: **Forehead**, **Nose**, **Mouth**). Names are `point1_*`,
 `point2_*`, `point3_*` with the parameter suffix:
 
 | Suffix | Default | Meaning |

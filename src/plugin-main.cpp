@@ -4,7 +4,7 @@
 #include <obs-frontend-api.h>
 #include <obs-module.h>
 OBS_DECLARE_MODULE()
-OBS_MODULE_AUTHOR("OBS Parameter Animator contributors")
+OBS_MODULE_AUTHOR("MoskiAutomator contributors")
 MODULE_EXPORT const char *obs_module_description(void) {
     return "Six-zone GPU distortion with time-based C++ parameter animation";
 }
@@ -16,7 +16,7 @@ bool obs_module_load(void) {
 }
 void obs_module_post_load(void) {
     panel = createAnimatorPanel(static_cast<QWidget *>(obs_frontend_get_main_window()));
-    if (!obs_frontend_add_dock_by_id("obs-parameter-animator", "Parameter Animator", panel)) {
+    if (!obs_frontend_add_dock_by_id("obs-parameter-animator", "MoskiAutomator", panel)) {
         delete panel;
         panel = nullptr;
     }

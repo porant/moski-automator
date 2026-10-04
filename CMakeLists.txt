@@ -126,6 +126,18 @@ if(BUILD_PLUGIN)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen\\;minimal;PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")
     endif()
   endif()
+  # JSON tab message builder (src/json_builder.hpp): pure QtCore, no OBS or GUI needed.
+  if(BUILD_TESTING)
+    add_executable(json-tests tests/json_tests.cpp)
+    target_include_directories(json-tests PRIVATE src)
+    target_link_libraries(json-tests PRIVATE Qt6::Core)
+    add_test(NAME json-messages COMMAND json-tests)
+    if(WIN32)
+      # Qt6Core.dll is not on PATH during ctest runs; point the loader at the SDK's Qt.
+      set_tests_properties(json-messages PROPERTIES
+        ENVIRONMENT "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}")
+    endif()
+  endif()
   set_target_properties(obs-parameter-animator PROPERTIES PREFIX "")
   if(MSVC)
     target_compile_options(obs-parameter-animator PRIVATE /W4 /permissive- /utf-8)

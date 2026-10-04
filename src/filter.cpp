@@ -353,7 +353,7 @@ struct ShaderController {
     bool inCapture = false; // guards against recursive rendering while grabbing a detection frame
 };
 static const char *name(void *) {
-    return "Face Points Distortion + Parameter Animator";
+    return "MoskiFaceDetector";
 }
 static void defaults(obs_data_t *s) {
     obs_data_set_default_int(s, "mode", 2);

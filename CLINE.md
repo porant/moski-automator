@@ -80,6 +80,8 @@ cmd /c '"C:\...\vcvars64.bat" >nul && cmake --build build --target obs-parameter
 ```
 
 Успех = `Linking CXX shared module obs-parameter-animator.dll` и код возврата 0.
+**Правило проекта: любая сборка завершается установкой в `stage`** — после `cmake --build build`
+обязательно выполни `cmake --install build --prefix stage` и сверь хеши (раздел «Уложить в `stage`»).
 При configure ожидай строку `-- OPA: face tracking enabled with OpenCV 4.10.0 (...)`.
 
 ## Тесты
@@ -88,8 +90,9 @@ cmd /c '"C:\...\vcvars64.bat" >nul && cmake --build build --target obs-parameter
 ctest --test-dir build --output-on-failure
 ```
 
-5 тестов: `animation-engine`, `original-shader-preserved`, `shader-compiles`, `head-pose`,
-`zone-canvas-interaction`. Ожидаемо `100% tests passed out of 5`. Если их 4 и нет `head-pose` —
+6 тестов: `animation-engine`, `original-shader-preserved`, `shader-compiles`, `head-pose`,
+`json-messages`,
+`zone-canvas-interaction`. Ожидаемо `100% tests passed out of 6`. Если их 4 и нет `head-pose` —
 OpenCV не подключился, пересобери с `-DOpenCV_DIR=C:/dev/opencv/opencv/build`.
 
 ## Уложить в `stage`
@@ -122,11 +125,12 @@ Get-FileHash .\build\obs-parameter-animator.dll, .\stage\obs-plugins\64bit\obs-p
 
 ## Структура исходников
 
-- `src/ui.cpp` / `src/ui.hpp` — Qt-док (вкладки Visual / Table (advanced) / Log).
+- `src/ui.cpp` / `src/ui.hpp` — Qt-док (вкладки Visual / Table (advanced) / Log / JSON).
 - `src/filter.cpp` / `filter.hpp`, `animation.hpp` — GPU-фильтр и движок анимации.
 - `src/face_tracker.*`, `one_euro.hpp`, `head_pose.hpp` — трекинг лиц (YuNet).
 - `src/ws_vendor.cpp` / `ws_vendor.hpp` — WebSocket Vendor API.
 - `src/zone_canvas.hpp` — чистый Qt-виджет превью зон (используется и в `tests/canvas_preview.cpp`).
+- `src/json_builder.hpp` — генератор CallVendorRequest-сообщений для вкладки JSON; тест `json-tests`.
 
 ## Конвенции и грабли
 
@@ -135,7 +139,7 @@ Get-FileHash .\build\obs-parameter-animator.dll, .\stage\obs-plugins\64bit\obs-p
   через `valueChanged`. Масштаб ползунков: offset/radius ×10, magnitude ×1000 — лямбды
   `QSlider::valueChanged` делят обратно (`/10.0`, `/1000.0`). Любую правку диапазона слайдера
   синхронизируй с `addRow(...)` и с масштабом в `setPair`.
-- Параметры точки: `pointCount = 3` (Eyes / Nose / Mouth), `pointParamCount = 5`
+- Параметры точки: `pointCount = 3` (Forehead / Nose / Mouth), `pointParamCount = 5`
   (`enable`, `offset_x`, `offset_y`, `radius`, `magnitude`); `paramCount = 15`.
 - Репозиторий source-only: `build/`, `stage/`, `dist/`, `known-good/`, `working/`, `*.dll` — в `.gitignore`.
 - Редиска: правка многострочных строковых литералов через редактор бывает хрупкой из-за
@@ -151,6 +155,7 @@ Get-FileHash .\build\obs-parameter-animator.dll, .\stage\obs-plugins\64bit\obs-p
   В списке должны быть `modeBox, blurBox, blurPxSpin, debugBox, scaleBox, faceBox, smoothSpin,
   pointBox, enabledBox, durSpin, easing, autoReturn, holdSpin, returnSpin, returnEasing, testParam,
   testValue, table, value, duration, tableEasing, returnToBase, metrics, logs, logFilter, pause,
+  jsonAction, jsonParam, jsonFormat, jsonValue,
   hint` (плюс `sl`/`sp` из `addRow` создают `cxSld/cySld/radSld/magSld` и `*Spin`, а
   `magBox` — `magMinSpin/magMaxSpin`).
 - Как быстро найти строку краха по crash-логу (через PDB, без отладчика): в crash-логе есть таблица

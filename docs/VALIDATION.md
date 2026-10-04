@@ -138,7 +138,7 @@ repaint/layout даже когда ничего не менялось (на вк
 
 | Шаг | Наблюдение |
 |---|---|
-| `Docks → Parameter Animator` | панель появляется: вкладки Visual / Table / Log, обе новые группы на первой вкладке |
+| `Docks → MoskiAutomator` | панель появляется: вкладки Visual / Table / Log, обе новые группы на первой вкладке |
 | Значения блока | Move duration 1000 ms, Return delay 200 ms (новый дефолт), Return duration 1000 ms, auto return включён, Parameter = Magnitude, Value / delta = 0.3 |
 | Задать Move duration 3000 ms, Return delay 2000 ms, Return duration 4000 ms и нажать `Add (accumulate)` | `zone1_magnitude` 0.8000 → 1.1000 (состояние ANIMATE: накопленная дельта +0.3 к позиции), затем RETURN → 0.8000 и IDLE |
 | Вкладка Table | current / GPU value / target / progress / state соответствуют траектории; после возврата target = 0.8000 (позиция зоны, а не 0) |
