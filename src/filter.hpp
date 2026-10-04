@@ -14,8 +14,8 @@ constexpr const char *filterId = "opa_6zone_distortion";
 // zone_data array is sized for maxFaces faces.
 constexpr int maxFaces = 8;
 constexpr int maxZones = maxFaces * pointCount;
-// Debug markers: the 3 face-point anchors plus the 5 raw YuNet landmarks, per detected face.
-constexpr int maxMarkers = maxFaces * (pointCount + landmarkCount);
+// Debug markers: the 3 face-point anchors (eyes / nose / mouth) per detected face.
+constexpr int maxMarkers = maxFaces * pointCount;
 enum class Mode { Static = 0, Shader = 1, Plugin = 2 };
 struct Snapshot {
     AnimationController controller;
@@ -35,20 +35,11 @@ struct Snapshot {
     uint64_t faceDropped = 0;
     bool effectBlur = false;
     bool effectDebug = false;
-    // Meme morphs: one animated, cumulative intensity per morph slot.
-    std::array<MorphEffect, morphCount> morphs{};
 };
 class Engine {
   public:
-    Engine() {
-        // Morph slots are a fixed catalogue (one per MorphType); initialize once so their
-        // animated intensity keeps the [-1..1] bounds without being reset on every reconfigure.
-        for (int i = 0; i < morphCount; ++i)
-            morphs[i].initialize(static_cast<MorphType>(i));
-    }
     mutable std::mutex mutex;
     AnimationController controller;
-    std::array<MorphEffect, morphCount> morphs{};
     Mode mode = Mode::Plugin;
     bool effectBlur = false;  // independent option: blur the whole detected face box
     bool effectDebug = false; // independent option: overlay the face points
@@ -92,20 +83,9 @@ class Engine {
     void configure(obs_data_t *settings);
     void command(int index, const std::string &action, double value = 0, double duration = -1,
                  int easing = -1, int returnOverride = -1);
-    // Same Add/Set/Start/Stop/Reset semantics as command(), but for a meme morph slot.
-    void commandMorph(int index, const std::string &action, double value = 0, double duration = -1,
-                      int easing = -1, int returnOverride = -1);
     void startAll();
     void stopAll();
     void resetAll();
-    // True while every morph intensity is at rest (0) and no trajectory is running. Combined with
-    // magnitudesAtRest() this lets the filter skip the whole GPU pass when nothing is active.
-    bool morphsAtRest() const {
-        for (const auto &m : morphs)
-            if (m.intensity.state.active || m.intensity.gpuValue() != 0.0)
-                return false;
-        return true;
-    }
     Snapshot snapshot() const;
     void logLocked(const std::string &s);
     void sampleLocked(double now);

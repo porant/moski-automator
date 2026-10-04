@@ -32,16 +32,6 @@ void Engine::sampleLocked(double t) {
         if (p.gpuValue() != before)
             ++parameterUpdates;
     }
-    for (auto &m : morphs) {
-        auto &p = m.intensity;
-        if (!p.state.active)
-            continue;
-        const double before = p.gpuValue();
-        p.sample(t);
-        ++evaluations;
-        if (p.gpuValue() != before)
-            ++parameterUpdates;
-    }
     updateUs = std::chrono::duration<double, std::micro>(Clock::now() - begin).count();
     maxUpdateUs = std::max(maxUpdateUs, updateUs);
 }
@@ -93,34 +83,6 @@ void Engine::configure(obs_data_t *s) {
         // Configuration changes affect subsequent launches, not active trajectories.
         p.configuredAutoReturn = obs_data_get_bool(s, (key + "_auto_return").c_str());
     }
-    // --- meme morphs: same settings shape as a point parameter, keyed morph_<name>_* ---
-    for (int i = 0; i < morphCount; ++i) {
-        auto &p = morphs[i].intensity;
-        const std::string k = std::string("morph_") + morphKey(i);
-        morphs[i].enabled = obs_data_get_bool(s, (k + "_enabled").c_str());
-        auto number = [&](const char *suffix, double fallback, double lo, double hi) {
-            const double v = obs_data_get_double(s, (k + suffix).c_str());
-            return std::isfinite(v) ? std::clamp(v, lo, hi) : fallback;
-        };
-        double base = number("_value", 0, p.minimum, p.maximum);
-        if (!initialized || base != p.baseValue) {
-            p.state.active = false;
-            p.state.phase = Phase::Idle;
-            p.state.startValue = p.state.currentValue = p.state.targetValue = base;
-            p.baseValue = base;
-        }
-        p.configuredTarget = number("_target", base, p.minimum, p.maximum);
-        const double ms = number("_duration_ms", -1, -1, 3600000);
-        p.configuredDuration = ms < 0 ? defaultDuration : ms / 1000;
-        int e = (int)obs_data_get_int(s, (k + "_easing").c_str());
-        p.configuredEasing = e < 0 ? defaultEasing : std::clamp(e, 0, 30);
-        p.returnDuration = number("_return_ms", 1000, 0, 3600000) / 1000;
-        p.holdDuration = number("_hold_ms", 200, 0, 3600000) / 1000;
-        p.returnValue = number("_return_value", 0, p.minimum, p.maximum);
-        p.returnEasing =
-            std::clamp<int>((int)obs_data_get_int(s, (k + "_return_easing").c_str()), 0, 30);
-        p.configuredAutoReturn = obs_data_get_bool(s, (k + "_auto_return").c_str());
-    }
     // --- face tracking ---
     faceTracking = obs_data_get_bool(s, "face_tracking");
     faceFps = std::clamp<int>((int)obs_data_get_int(s, "face_fps"), 1, 60);
@@ -165,33 +127,6 @@ void Engine::command(int index, const std::string &action, double value, double 
     lastSample = -1;
     logLocked(action + " " + parameterName(index) + " target=" + std::to_string(p.state.targetValue));
 }
-void Engine::commandMorph(int index, const std::string &action, double value, double duration,
-                          int easing, int returnOverride) {
-    if (index < 0 || index >= morphCount)
-        throw std::invalid_argument("Unknown effect");
-    std::lock_guard lock(mutex);
-    if (mode != Mode::Plugin)
-        throw std::invalid_argument("Select Plugin animation mode first");
-    auto &p = morphs[index].intensity;
-    const double t = nowSeconds();
-    const double d = duration < 0 ? p.configuredDuration : duration;
-    const int e = easing < 0 ? p.configuredEasing : easing;
-    const bool ret = returnOverride < 0 ? p.configuredAutoReturn : returnOverride != 0;
-    if (action == "Stop")
-        p.stop(t);
-    else if (action == "Reset")
-        p.launch(p.returnValue, d, e, t, false);
-    else if (action == "Start")
-        p.launch(p.configuredTarget, d, e, t, ret);
-    else if (action == "Add")
-        p.add(value, d, e, t, ret);
-    else if (action == "Set")
-        p.launch(value, d, e, t, ret);
-    else
-        throw std::invalid_argument("Unknown action");
-    lastSample = -1;
-    logLocked(action + " effect " + morphKey(index) + " target=" + std::to_string(p.state.targetValue));
-}
 void Engine::startAll() {
     std::lock_guard lock(mutex);
     if (mode != Mode::Plugin)
@@ -199,10 +134,6 @@ void Engine::startAll() {
     const double t = nowSeconds();
     for (int i = 0; i < paramCount; ++i) {
         auto &p = controller.at(i);
-        p.launch(p.configuredTarget, p.configuredDuration, p.configuredEasing, t, p.configuredAutoReturn);
-    }
-    for (auto &m : morphs) {
-        auto &p = m.intensity;
         p.launch(p.configuredTarget, p.configuredDuration, p.configuredEasing, t, p.configuredAutoReturn);
     }
     lastSample = -1;
@@ -213,8 +144,6 @@ void Engine::stopAll() {
     const double t = nowSeconds();
     for (int i = 0; i < paramCount; ++i)
         controller.at(i).stop(t);
-    for (auto &m : morphs)
-        m.intensity.stop(t);
     lastSample = -1;
     logLocked("StopAll");
 }
@@ -225,10 +154,6 @@ void Engine::resetAll() {
     const double t = nowSeconds();
     for (int i = 0; i < paramCount; ++i) {
         auto &p = controller.at(i);
-        p.launch(p.baseValue, p.configuredDuration, p.configuredEasing, t, false);
-    }
-    for (auto &m : morphs) {
-        auto &p = m.intensity;
         p.launch(p.baseValue, p.configuredDuration, p.configuredEasing, t, false);
     }
     lastSample = -1;
@@ -247,7 +172,6 @@ Snapshot Engine::snapshot() const {
                parameterUpdates,
                uniformCalls,
                {logs.begin(), logs.end()}};
-    s.morphs = morphs;
     s.faceTracking = faceTracking;
     s.effectBlur = effectBlur;
     s.effectDebug = effectDebug;
@@ -415,7 +339,7 @@ struct ShaderController {
     gs_effect_t *effect = nullptr;
     gs_eparam_t *zoneCount = nullptr, *zoneData = nullptr;
     gs_eparam_t *markerCount = nullptr, *markerData = nullptr;
-    gs_eparam_t *faceCount = nullptr, *faceBox = nullptr, *faceRoll = nullptr, *faceLm = nullptr;
+    gs_eparam_t *faceCount = nullptr, *faceBox = nullptr;
     gs_eparam_t *blurFaces = nullptr, *blurPx = nullptr, *debugPoints = nullptr;
     gs_eparam_t *animate = nullptr, *size = nullptr, *time = nullptr;
     std::shared_ptr<Engine> engine = std::make_shared<Engine>();
@@ -449,20 +373,6 @@ static void defaults(obs_data_t *s) {
         obs_data_set_default_double(s, (k + "_return_ms").c_str(), 1000);
         // A short hold by default: the pulse stays visible briefly after the last Add, then returns.
         obs_data_set_default_double(s, (k + "_hold_ms").c_str(), 200);
-        obs_data_set_default_int(s, (k + "_return_easing").c_str(), 5);
-    }
-    // Meme morphs: same defaults shape as a point magnitude (strength 0..[-1..1], auto return).
-    for (int i = 0; i < morphCount; ++i) {
-        const std::string k = std::string("morph_") + morphKey(i);
-        obs_data_set_default_bool(s, (k + "_enabled").c_str(), false);
-        obs_data_set_default_double(s, (k + "_value").c_str(), 0);
-        obs_data_set_default_double(s, (k + "_target").c_str(), 0);
-        obs_data_set_default_double(s, (k + "_duration_ms").c_str(), -1);
-        obs_data_set_default_int(s, (k + "_easing").c_str(), -1);
-        obs_data_set_default_bool(s, (k + "_auto_return").c_str(), true);
-        obs_data_set_default_double(s, (k + "_return_value").c_str(), 0);
-        obs_data_set_default_double(s, (k + "_hold_ms").c_str(), 200);
-        obs_data_set_default_double(s, (k + "_return_ms").c_str(), 800);
         obs_data_set_default_int(s, (k + "_return_easing").c_str(), 5);
     }
     // Face tracking is opt-in. Each detected face gets one zone per enabled point.
@@ -512,14 +422,12 @@ static void *create(obs_data_t *s, obs_source_t *source) {
     f->markerData = gs_effect_get_param_by_name(f->effect, "marker_data");
     f->faceCount = gs_effect_get_param_by_name(f->effect, "face_count");
     f->faceBox = gs_effect_get_param_by_name(f->effect, "face_box");
-    f->faceRoll = gs_effect_get_param_by_name(f->effect, "face_roll");
-    f->faceLm = gs_effect_get_param_by_name(f->effect, "face_lm");
     f->blurFaces = gs_effect_get_param_by_name(f->effect, "blur_faces");
     f->blurPx = gs_effect_get_param_by_name(f->effect, "blur_px");
     f->debugPoints = gs_effect_get_param_by_name(f->effect, "debug_points");
     if (!f->zoneCount || !f->zoneData || !f->animate || !f->size || !f->time || !f->markerCount ||
-        !f->markerData || !f->faceCount || !f->faceBox || !f->faceRoll || !f->faceLm ||
-        !f->blurFaces || !f->blurPx || !f->debugPoints) {
+        !f->markerData || !f->faceCount || !f->faceBox || !f->blurFaces || !f->blurPx ||
+        !f->debugPoints) {
         blog(LOG_ERROR, "[OPA] Required shader uniforms missing");
         destroy(f);
         return nullptr;
@@ -540,7 +448,7 @@ static void *create(obs_data_t *s, obs_source_t *source) {
 }
 // Grabs a small, downscaled RGBA frame of the filter's own input and hands it to the detector.
 // This is the *only* extra GPU cost of face tracking and it only runs while (a) tracking is on and
-// (b) a point magnitude or a meme morph is non-zero, at the configured detection FPS - not per
+// (b) a point magnitude is non-zero, at the configured detection FPS - not per
 // rendered frame. We render the target ourselves with this filter disabled (guarded by inCapture)
 // so the filter never renders itself, then read the texrender back through a stage surface at the
 // detection resolution.
@@ -604,11 +512,9 @@ static void render(void *v, gs_effect_t *) {
     const auto w = obs_source_get_base_width(target), h = obs_source_get_base_height(target);
     if (!w || !h)
         return;
-    // Read the animated point parameters, the meme morphs and the independent effect flags.
+    // Read the animated point parameters and the independent effect flags.
     std::array<double, pointCount> pEnable{}, pOffX{}, pOffY{}, pRadius{}, pMag{};
-    std::array<float, morphCount> morphVal{};
     bool sine = false, active = false, effectBlur = false, effectDebug = false, faceScale = true;
-    bool morphActive = false;
     double elapsed = 0, faceBlurPx = 24;
     {
         std::lock_guard lock(f.engine->mutex);
@@ -617,15 +523,9 @@ static void render(void *v, gs_effect_t *) {
         effectDebug = e.effectDebug;
         faceBlurPx = e.faceBlurPx;
         faceScale = e.faceScale;
-        for (int i = 0; i < morphCount; ++i) {
-            // A disabled morph is forced to 0 so the shader treats it as "off".
-            const double mv = e.morphs[i].enabled ? e.morphs[i].intensity.gpuValue() : 0.0;
-            morphVal[i] = (float)mv;
-            morphActive = morphActive || mv != 0.0;
-        }
-        // Blur, debug and morphs are independent of the point morph, so they keep the filter active
+        // Blur and debug are independent of the point distortion, so they keep the filter active
         // even with every magnitude at rest. Otherwise the zero-work fast path applies.
-        active = effectBlur || effectDebug || morphActive || !e.controller.magnitudesAtRest();
+        active = effectBlur || effectDebug || !e.controller.magnitudesAtRest();
         if (active) {
             const double t = nowSeconds();
             if (e.mode == Mode::Plugin && (e.lastSample < 0 || e.fps == 0 || t >= e.lastSample)) {
@@ -724,10 +624,8 @@ static void render(void *v, gs_effect_t *) {
     }
     // From the smoothed tracks build: distortion zones, debug markers and blur face boxes.
     std::array<float, maxZones * 4> zones{};
-    std::array<float, maxMarkers * 4> markers{}; // 3 anchors + 5 landmarks per face
+    std::array<float, maxMarkers * 4> markers{}; // one marker per (face x point anchor)
     std::array<float, maxFaces * 4> boxes{};
-    std::array<float, maxFaces * 4> rolls{};  // per-face data; .x = roll, .y = yaw, .z = pitch
-    std::array<float, maxFaces * 12> faceLm{}; // per-face debug landmarks (3 float4 per face)
     int zoneCount = 0, markerCount = 0, faceCount = 0;
     {
         std::lock_guard lock(f.engine->mutex);
@@ -739,35 +637,13 @@ static void render(void *v, gs_effect_t *) {
             // Scale to the face: radius and offsets are then relative to the face height instead of
             // the frame, so a distant face gets proportionally smaller points.
             const double scale = faceScale ? std::clamp(tr.h / 100.0, 0.05, 3.0) : 1.0;
-            // Face boxes and pose angles feed the blur option and the debug overlay.
+            // Face boxes feed the blur option and the debug overlay (detection box).
             if ((effectBlur || effectDebug) && faceCount < maxFaces) {
                 float *b = boxes.data() + faceCount * 4;
                 b[0] = (float)tr.cx;
                 b[1] = (float)tr.cy;
                 b[2] = (float)tr.w;
                 b[3] = (float)tr.h;
-                float *r = rolls.data() + faceCount * 4;
-                r[0] = (float)tr.roll;  // eye axis (in-plane roll)
-                r[1] = (float)tr.yaw;   // head turn
-                r[2] = (float)tr.pitch; // head nod
-                if (effectDebug) {
-                    // Raw landmark geometry for the debug overlay (eye axis, vertical axis, gizmo).
-                    float *lm = faceLm.data() + faceCount * 12; // 3 float4 per face
-                    const bool has = tr.hasLandmarks;
-                    const double zero = 0.0;
-                    lm[0] = (float)(has ? tr.landmarks[0].x : zero); // right eye x
-                    lm[1] = (float)(has ? tr.landmarks[0].y : zero);
-                    lm[2] = (float)(has ? tr.landmarks[1].x : zero); // left eye x
-                    lm[3] = (float)(has ? tr.landmarks[1].y : zero);
-                    lm[4] = (float)(has ? tr.landmarks[2].x : zero); // nose tip x
-                    lm[5] = (float)(has ? tr.landmarks[2].y : zero);
-                    lm[6] = (float)(has ? tr.landmarks[3].x : zero); // right mouth x
-                    lm[7] = (float)(has ? tr.landmarks[3].y : zero);
-                    lm[8] = (float)(has ? tr.landmarks[4].x : zero); // left mouth x
-                    lm[9] = (float)(has ? tr.landmarks[4].y : zero);
-                    lm[10] = has ? 1.0f : 0.0f; // landmarks available flag
-                    lm[11] = 0.0f;
-                }
                 ++faceCount;
             }
             for (int p = 0; p < pointCount; ++p) {
@@ -784,7 +660,7 @@ static void render(void *v, gs_effect_t *) {
                     ++markerCount;
                 }
                 if (effectBlur == false && effectDebug == false && pMag[p] == 0.0)
-                    continue; // pure morph with nothing to draw
+                    continue; // disabled point with nothing to draw
                 if (pMag[p] != 0.0 && pRadius[p] > 0.0 && zoneCount < maxZones) {
                     float *z = zones.data() + zoneCount * 4;
                     z[0] = (float)ax;
@@ -792,18 +668,6 @@ static void render(void *v, gs_effect_t *) {
                     z[2] = (float)(pRadius[p] * scale);
                     z[3] = (float)pMag[p];
                     ++zoneCount;
-                }
-            }
-            // Raw landmarks (eyes / nose tip / mouth corners) drawn with marker indices 3..7 so the
-            // debug overlay shows the newer points too, not just the three derived anchors.
-            if (effectDebug && tr.hasLandmarks) {
-                for (int l = 0; l < landmarkCount && markerCount < maxMarkers; ++l) {
-                    float *m = markers.data() + markerCount * 4;
-                    m[0] = (float)tr.landmarks[l].x;
-                    m[1] = (float)tr.landmarks[l].y;
-                    m[2] = (float)(1.1 * std::clamp(scale, 0.6, 2.0)); // a bit smaller than anchors
-                    m[3] = (float)(pointCount + l);                    // 3..7 -> distinct colour
-                    ++markerCount;
                 }
             }
         }
@@ -821,8 +685,6 @@ static void render(void *v, gs_effect_t *) {
     gs_effect_set_val(f.markerData, markers.data(), sizeof(float) * 4 * maxMarkers);
     gs_effect_set_int(f.markerCount, markerCount);
     gs_effect_set_val(f.faceBox, boxes.data(), sizeof(float) * 4 * maxFaces);
-    gs_effect_set_val(f.faceRoll, rolls.data(), sizeof(float) * 4 * maxFaces);
-    gs_effect_set_val(f.faceLm, faceLm.data(), sizeof(float) * 4 * maxFaces * 3);
     gs_effect_set_int(f.faceCount, faceCount);
     gs_effect_set_bool(f.blurFaces, effectBlur);
     gs_effect_set_float(f.blurPx, (float)faceBlurPx);
@@ -834,7 +696,7 @@ static void render(void *v, gs_effect_t *) {
     gs_effect_set_float(f.time, sine ? (float)elapsed : 0.0f);
     {
         std::lock_guard lock(f.engine->mutex);
-        f.engine->uniformCalls += 14;
+        f.engine->uniformCalls += 12;
     }
     obs_source_process_filter_end(f.source, f.effect, w, h);
 }
@@ -862,12 +724,7 @@ static bool button(obs_properties_t *, obs_property_t *property, void *v) {
             f.engine->stopAll();
         else if (key == "reset_all")
             f.engine->resetAll();
-        else if (key.rfind("fx", 0) == 0) {
-            // Meme-morph button, key form "fx<index>:<action>" e.g. "fx2:Add".
-            const auto separator = key.find(':');
-            const int index = std::stoi(key.substr(2, separator - 2));
-            f.engine->commandMorph(index, key.substr(separator + 1));
-        } else {
+        else {
             const auto separator = key.find(':');
             const std::string action = key.substr(0, separator);
             const int index = parameterIndex(key.substr(separator + 1));
@@ -886,7 +743,7 @@ static obs_properties_t *properties(void *v) {
     obs_property_list_add_int(m, "Plugin animation", 2);
     obs_properties_add_bool(props, "effect_blur", "Blur faces (cover them)");
     obs_properties_add_float_slider(props, "face_blur_px", "Blur radius (px)", 2, 128, 2);
-    obs_properties_add_bool(props, "effect_debug", "Debug: draw face points");
+    obs_properties_add_bool(props, "effect_debug", "Debug: draw face box and points");
     obs_properties_add_bool(props, "face_scale", "Scale points to the face size");
     auto *fps = obs_properties_add_list(props, "animation_fps", "Animation FPS", OBS_COMBO_TYPE_LIST,
                                         OBS_COMBO_FORMAT_INT);
@@ -943,27 +800,6 @@ static obs_properties_t *properties(void *v) {
         }
         obs_properties_add_group(props, ("point" + std::to_string(z + 1)).c_str(), pointName(z),
                                  OBS_GROUP_NORMAL, group);
-    }
-    // Meme morphs: one group per morph; strength is a cumulative animated parameter (Add stacks).
-    for (int i = 0; i < morphCount; ++i) {
-        const std::string k = std::string("morph_") + morphKey(i);
-        auto *row = obs_properties_create();
-        obs_properties_add_bool(row, (k + "_enabled").c_str(), "Enabled");
-        obs_properties_add_float_slider(row, (k + "_value").c_str(), "Strength", -1, 1, .01);
-        obs_properties_add_float(row, (k + "_target").c_str(), "Target of Start", -1, 1, .01);
-        obs_properties_add_float(row, (k + "_duration_ms").c_str(), "Move duration ms (-1 = default)",
-                                 -1, 3600000, 1);
-        easingProperty(row, k + "_easing", "Move easing", true);
-        obs_properties_add_bool(row, (k + "_auto_return").c_str(), "Auto return after reaching the target");
-        obs_properties_add_float(row, (k + "_return_value").c_str(), "Return endpoint", -1, 1, .01);
-        obs_properties_add_float(row, (k + "_hold_ms").c_str(),
-                                 "Return delay after the last Add (ms)", 0, 3600000, 10);
-        obs_properties_add_float(row, (k + "_return_ms").c_str(), "Return duration (ms)", 0, 3600000, 10);
-        easingProperty(row, k + "_return_easing", "Return easing");
-        for (const char *action : {"Start", "Stop", "Reset"})
-            obs_properties_add_button2(row, ("fx" + std::to_string(i) + ":" + action).c_str(), action,
-                                       button, v);
-        obs_properties_add_group(props, k.c_str(), morphName(i), OBS_GROUP_NORMAL, row);
     }
     return props;
 }

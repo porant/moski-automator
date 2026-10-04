@@ -8,11 +8,9 @@
 #include <cstring>
 using namespace opa;
 static obs_websocket_vendor vendor = nullptr;
-static std::array<const char *, 15> actions = {
-    "Add",          "Set",      "Reset",       "Stop",
-    "Start",        "StartAll", "StopAll",     "ResetAll",
-    "Get",          "List",     "FaceTrack",   "ListEffects",
-    "EnableEffect", "SetEffect", "AddEffect"};
+static std::array<const char *, 11> actions = {"Add",      "Set",      "Reset",    "Stop",
+                                               "Start",    "StartAll", "StopAll",  "ResetAll",
+                                               "Get",      "List",     "FaceTrack"};
 static bool has(obs_data_t *d, const char *k) {
     return obs_data_has_user_value(d, k);
 }
@@ -28,22 +26,6 @@ static double number(obs_data_t *d, const char *k) {
     if (!std::isfinite(v))
         throw std::invalid_argument(std::string("Non-finite ") + k);
     return v;
-}
-// Resolve the target meme morph from an "effect" name (morphKey) or an "effectId" 0..morphCount-1.
-static int effectIndexOf(obs_data_t *r) {
-    if (has(r, "effect")) {
-        const int i = morphIndex(obs_data_get_string(r, "effect"));
-        if (i < 0)
-            throw std::invalid_argument("Unknown effect; use ListEffects for names/ids");
-        return i;
-    }
-    if (has(r, "effectId")) {
-        const double id = number(r, "effectId");
-        if (id >= 0 && id < morphCount && id == std::floor(id))
-            return (int)id;
-        throw std::invalid_argument("effectId must be an integer 0..5");
-    }
-    throw std::invalid_argument("Missing effect or effectId");
 }
 static void callback(obs_data_t *r, obs_data_t *out, void *priv) {
     obs_source_t *filter = nullptr;
@@ -61,22 +43,6 @@ static void callback(obs_data_t *r, obs_data_t *out, void *priv) {
                 obs_data_release(item);
             }
             obs_data_set_array(out, "filters", array);
-            obs_data_array_release(array);
-            obs_data_set_bool(out, "ok", true);
-            return;
-        }
-        if (action == "ListEffects") {
-            // Static catalogue of meme morphs; no filter address needed (Get reports live values).
-            auto *array = obs_data_array_create();
-            for (int i = 0; i < morphCount; ++i) {
-                auto *item = obs_data_create();
-                obs_data_set_string(item, "effect", morphKey(i));
-                obs_data_set_int(item, "effectId", i);
-                obs_data_set_string(item, "name", morphName(i));
-                obs_data_array_push_back(array, item);
-                obs_data_release(item);
-            }
-            obs_data_set_array(out, "effects", array);
             obs_data_array_release(array);
             obs_data_set_bool(out, "ok", true);
             return;
@@ -117,39 +83,6 @@ static void callback(obs_data_t *r, obs_data_t *out, void *priv) {
                 obs_data_set_bool(s, "face_scale", obs_data_get_bool(r, "faceScale"));
             obs_source_update(filter, s);
             obs_data_release(s);
-        } else if (action == "EnableEffect") {
-            // Toggles one meme morph; enabling is a settings change, the strength stays animated.
-            const int ei = effectIndexOf(r);
-            obs_data_t *s = obs_source_get_settings(filter);
-            const std::string k = std::string("morph_") + morphKey(ei);
-            if (has(r, "enabled"))
-                obs_data_set_bool(s, (k + "_enabled").c_str(), obs_data_get_bool(r, "enabled"));
-            if (has(r, "value"))
-                obs_data_set_double(s, (k + "_value").c_str(), number(r, "value"));
-            obs_source_update(filter, s);
-            obs_data_release(s);
-        } else if (action == "SetEffect" || action == "AddEffect") {
-            // Animated, cumulative control of one morph strength (Add accumulates like the points).
-            const int ei = effectIndexOf(r);
-            const double value = number(r, "value");
-            double duration = -1;
-            int easing = -1, ret = -1;
-            if (has(r, "durationMs")) {
-                duration = number(r, "durationMs") / 1000;
-                if (duration < 0 || duration > 3600)
-                    throw std::invalid_argument("durationMs must be 0..3600000");
-            }
-            if (has(r, "easing"))
-                easing = Easing::parse(obs_data_get_string(r, "easing"));
-            if (has(r, "returnToZero")) {
-                auto *item = obs_data_item_byname(r, "returnToZero");
-                const bool valid = obs_data_item_gettype(item) == OBS_DATA_BOOLEAN;
-                obs_data_item_release(&item);
-                if (!valid)
-                    throw std::invalid_argument("returnToZero must be boolean");
-                ret = obs_data_get_bool(r, "returnToZero") ? 1 : 0;
-            }
-            e->commandMorph(ei, action == "AddEffect" ? "Add" : "Set", value, duration, easing, ret);
         } else if (action == "StartAll")
             e->startAll();
         else if (action == "StopAll")
@@ -203,27 +136,6 @@ static void callback(obs_data_t *r, obs_data_t *out, void *priv) {
         }
         obs_data_set_array(out, "parameters", array);
         obs_data_array_release(array);
-        // Meme morphs: per-effect state (strength + animation phase).
-        auto *effects = obs_data_array_create();
-        for (int i = 0; i < morphCount; ++i) {
-            const auto &m = s.morphs[i];
-            auto *item = obs_data_create();
-            obs_data_set_string(item, "effect", morphKey(i));
-            obs_data_set_int(item, "effectId", i);
-            obs_data_set_string(item, "name", morphName(i));
-            obs_data_set_bool(item, "enabled", m.enabled);
-            obs_data_set_double(item, "value", m.intensity.state.currentValue);
-            obs_data_set_double(item, "gpuValue", m.intensity.gpuValue());
-            obs_data_set_double(item, "target", m.intensity.state.targetValue);
-            obs_data_set_double(item, "progress", m.intensity.state.progress);
-            obs_data_set_string(item, "state", phaseName(m.intensity.state.phase));
-            obs_data_set_bool(item, "active", m.intensity.state.active);
-            obs_data_set_string(item, "easing", easingNames[m.intensity.state.easingType]);
-            obs_data_array_push_back(effects, item);
-            obs_data_release(item);
-        }
-        obs_data_set_array(out, "effects", effects);
-        obs_data_array_release(effects);
         obs_data_set_int(out, "mode", (int)s.mode);
         obs_data_set_int(out, "activeAnimations", s.controller.activeCount());
         obs_data_set_double(out, "cpuUpdateUs", s.updateUs);

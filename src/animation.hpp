@@ -256,42 +256,6 @@ struct AnimationController {
         return true;
     }
 };
-// ---------------------------------------------------------------------------
-// Meme morphs: whole-face geometric warps on the UVs, applied inside the single shader pass.
-// Each morph is an animated, *cumulative* intensity (Add stacks deltas like the point magnitudes)
-// so several morphs can run in parallel on every detected face. The GPU half lives in
-// data/face-points.effect (see morphUV + the "MEME MORPHS" block).
-// ---------------------------------------------------------------------------
-enum class MorphType { BigHead = 0, Squash, Swirl, Melt, Mirror, Tilt };
-constexpr int morphCount = 6;
-inline const char *morphName(int t) {
-    constexpr const char *names[morphCount] = {"Big head",          "Squash / stretch", "Swirl",
-                                               "Melt",              "Mirror",           "Tilt"};
-    return (t >= 0 && t < morphCount) ? names[t] : "?";
-}
-// Stable settings/API key of a morph (used in morph_<key>_* settings and the vendor API).
-inline const char *morphKey(int t) {
-    constexpr const char *keys[morphCount] = {"big_head", "squash", "swirl", "melt", "mirror", "tilt"};
-    return (t >= 0 && t < morphCount) ? keys[t] : "?";
-}
-inline int morphIndex(const std::string &key) {
-    for (int i = 0; i < morphCount; ++i)
-        if (key == morphKey(i))
-            return i;
-    return -1;
-}
-// One morph slot. `enabled` gates it in the shader; `intensity` is a signed strength (-1..1, 0 =
-// no warp) animated exactly like a point magnitude, including the accumulative Add semantics.
-struct MorphEffect {
-    AnimatedParameter intensity;
-    bool enabled = false;
-    MorphType type = MorphType::BigHead;
-    void initialize(MorphType t) {
-        type = t;
-        intensity.initialize(0, -1, 1);
-        intensity.autoReturn = intensity.configuredAutoReturn = true;
-    }
-};
 inline std::string parameterName(int index) {
     constexpr const char *suffix[] = {"enable", "offset_x", "offset_y", "radius", "magnitude"};
     return "point" + std::to_string(index / pointParamCount + 1) + "_" +

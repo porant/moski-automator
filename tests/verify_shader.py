@@ -22,11 +22,9 @@ assert ('correctedUV.x *= ar;' in fp) or ('correctedUV.x * ar' in fp), 'aspect u
 assert 'blur_faces' in fp and 'debug_points' in fp, 'blur/debug options missing'
 assert 'uniform float4 face_box[' in fp and 'uniform float4 marker_data[' in fp, 'blur/debug arrays missing'
 assert 'float3 markerColor(' in fp, 'debug marker colour map missing'
-assert 'uniform float4 face_roll[' in fp, 'head-roll uniform missing (must be a float4 array)'
-assert 'uniform float4 face_lm[' in fp, 'per-face debug landmark uniform missing'
-assert 'uniform float4 marker_data[64]' in fp, 'marker array must fit anchors + landmarks per face'
+assert 'uniform float4 marker_data[24]' in fp, 'marker array must fit anchors per face'
 # The effect compiles as HLSL for D3D11, not GLSL: GLSL-only intrinsics fail at runtime with
 # "undeclared identifier". Keep them out (use lerp instead of mix, etc.).
 for glsl_only in ('mix(', 'fract(', 'texture('):
     assert glsl_only not in fp, f'GLSL-only intrinsic not valid in HLSL: {glsl_only}'
-print('PASS: original shader bytes, 6 calls, texture samples, aspect correction; face-points shader (morph + independent blur/debug)')
+print('PASS: original shader bytes, 6 calls, texture samples, aspect correction; face-points shader (independent blur/debug)')

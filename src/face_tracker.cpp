@@ -135,7 +135,7 @@ struct FaceTracker::Impl {
                     const double rmx = f[10], rmy = f[11], lmx = f[12], lmy = f[13];
                     const auto pctX = [w](double X) { return std::clamp(X / w * 100.0, -50.0, 150.0); };
                     const auto pctY = [h](double Y) { return std::clamp(Y / h * 100.0, -50.0, 150.0); };
-                    // Keep the raw landmarks too, so feature-anchored morphs (eyes/nose/mouth) can
+                    // Keep the raw landmarks too, so feature-anchored anchors (eyes/nose/mouth) can
                     // use them later; the three anchors below are derived from the same points.
                     r.landmark[0] = {pctX(rex), pctY(rey)}; // right eye
                     r.landmark[1] = {pctX(lex), pctY(ley)}; // left eye

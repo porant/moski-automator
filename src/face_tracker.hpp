@@ -37,12 +37,12 @@ struct FaceRect {
     //   [0] eyes (midpoint of both eyes), [1] nose tip, [2] mouth (midpoint of the corners).
     FacePoint anchor[3];
     // Raw YuNet landmarks in percent units, order: right eye, left eye, nose tip, right/left mouth
-    // corner. Zeroed when the detector could not supply them. Kept for feature-anchored morphs
+    // corner. Zeroed when the detector could not supply them. Kept for feature-anchored anchors
     // (eyes / nose / mouth) and for the debug overlay.
     FacePoint landmark[landmarkCount];
     bool landmarkValid = false; // false when the detector fell back to box fractions
     // Face in-plane rotation (roll) in radians, from the right-eye -> left-eye axis. 0 = upright,
-    // positive = head tilted so the left eye goes down. Used to orient landmark-anchored morphs.
+    // positive = head tilted so the left eye goes down. Reported in the face-tracking log.
     double roll = 0;
     // Head turn (yaw) and nod (pitch) in radians, from a solvePnP fit of the five landmarks.
     double yaw = 0;

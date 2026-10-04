@@ -74,12 +74,8 @@ Parameter ID = `(point - 1) * 5 + offset`:
 | StopAll | Заморозить все в current |
 | ResetAll | Плавно вернуть все к сохранённым значениям покоя (position) |
 | FaceTrack | Включить/выключить и настроить распознавание лиц: `enabled` (bool), `fps`, `maxFaces`, `score`, `smoothMs` (сглаживание точек), `blur` (bool, блюр лиц), `blurPx` (радиус блюра, px), `debug` (bool, рисовать точки), `faceScale` (bool, масштаб точек под размер лица). Все поля необязательны; в ответе всегда возвращаются лица и статус |
-| ListEffects | Каталог мемных морфов; адрес не нужен. Возвращает `effects`: `effect` (ключ), `effectId` (0..5), `name` |
-| EnableEffect | `effect`/`effectId` и `enabled` (bool); вкл/выкл морф. Опционально `value` задаёт его позицию покоя |
-| SetEffect | `effect`/`effectId` и numeric `value`; плавный переход к абсолютной силе (−1..1) |
-| AddEffect | `effect`/`effectId` и numeric `value`; накопительная сила: дельты складываются, затем возврат (как magnitude) |
 
-Все requests кроме List и ListEffects требуют адрес фильтра. Add/Set/Start/Reset, а также EnableEffect/SetEffect/AddEffect требуют режима Plugin. Get/List/StopAll разрешены во всех режимах. Stop конкретного параметра тоже проверяет Plugin mode, поскольку это траекторная команда.
+Все requests кроме List требуют адрес фильтра. Add/Set/Start/Reset требуют режима Plugin. Get/List/StopAll разрешены во всех режимах. Stop конкретного параметра тоже проверяет Plugin mode, поскольку это траекторная команда.
 
 Для parameter requests опциональны `durationMs` (0..3600000) и `easing` (одно точное имя из списка ниже). Если отсутствуют, используется настройка данного параметра; его inherited defaults разрешены при загрузке конфигурации. Stop игнорирует duration/easing.
 
@@ -99,30 +95,6 @@ Parameter ID = `(point - 1) * 5 + offset`:
 * Задержка перед возвратом (`pointN_*_hold_ms`, по умолчанию 200 ms) отсчитывается заново от каждого нового `Add`, поэтому серия быстрых нажатий держит эффект и отпускает его только после последнего.
 * Затем за `pointN_*_return_ms` значение плавно возвращается к `pointN_*_return_value`.
 * Значения ограничены bounds параметра, поэтому серия очень больших дельт не выходит за допустимый диапазон.
-
-## Мемные морфы (morphs)
-
-Морфы — геометрические искажения UV всего лица, применяемые поверх точечного distortion внутри
-одного прохода шейдера. Сила каждого морфа анимируется и накапливается так же, как `magnitude`
-точки, поэтому несколько морфов можно включать параллельно.
-
-| effectId | effect (ключ) | Что делает |
-|---|---|---|
-| 0 | big_head | увеличивает / уменьшает лицо (value>0 крупнее, value<0 мельче) |
-| 1 | squash | широкое / вытянутое лицо (value>0 шире, value<0 выше) |
-| 2 | swirl | закрутка вокруг центра лица |
-| 3 | melt | «плавит» лицо вниз |
-| 4 | mirror | зеркалит лицо по горизонтали (по порогу abs(value) ≥ 0.5) |
-| 5 | tilt | наклоняет лицо |
-
-Знак `value` задаёт направление, `0` — выключено. `EnableEffect` включает морф; у выключенного
-морфа сила трактуется как 0. Пример накопительного всплеска:
-
-```json
-{ "effect": "big_head", "value": 0.3, "durationMs": 300, "returnToZero": true }
-```
-
-Морфы применяются ко **всем** обнаруженным лицам и сосуществуют с точками, блюром и друг с другом.
 
 ## Easing names
 
@@ -180,16 +152,6 @@ EaseInBounce   EaseOutBounce   EaseInOutBounce
 
 Поля `faces` (центры и размеры в процентах 0–100) и статус трекинга присутствуют всегда; при
 выключенном трекинге `faces` пуст. Лица отсортированы слева направо.
-
-Ответ также содержит `effects` — состояние каждого мемного морфа: `effect`, `effectId`, `enabled`,
-`value`, `gpuValue`, `target`, `progress`, `state`, `active`, `easing`:
-
-```json
-"effects": [
-  { "effect": "big_head", "effectId": 0, "enabled": true, "value": 0.45,
-    "gpuValue": 0.45, "target": 0.45, "state": "IDLE", "active": false }
-]
-```
 
 Цифры выше иллюстративные. Progress — raw time progress, не нормализованный current; при easing current 0.734 не означает progress 73.4%. State: IDLE, ANIMATE, HOLD, RETURN. Active включает hold. При окончании state=IDLE и progress сохраняет последний stage progress. Get не вызывает CPU/GPU render и возвращает последнее вычисленное состояние.
 

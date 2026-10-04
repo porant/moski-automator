@@ -132,22 +132,6 @@ int main() {
     require(rest.magnitudesAtRest(), "launching to zero keeps magnitude at rest");
     rest.at(pointCount * pointParamCount - 1).launch(.25, .3, 0, 0, false);
     require(!rest.magnitudesAtRest(), "any point leaving zero breaks rest");
-    // Meme morphs reuse the same cumulative animation model (signed strength, 0 = off).
-    MorphEffect morph;
-    morph.initialize(MorphType::BigHead);
-    require(near(morph.intensity.minimum, -1) && near(morph.intensity.maximum, 1),
-            "morph strength bounds are signed");
-    require(!morph.enabled, "morphs start disabled");
-    morph.intensity.returnDuration = .8;
-    morph.intensity.holdDuration = .2;
-    morph.intensity.returnValue = 0;
-    morph.intensity.add(.3, .3, 0, 0, true);
-    morph.intensity.add(.3, .3, 0, .1, true);
-    require(near(morph.intensity.state.targetValue, .6), "morph Add accumulates like a magnitude");
-    morph.intensity.sample(2.0);
-    require(!morph.intensity.state.active && near(morph.intensity.state.currentValue, 0),
-            "morph pulse returns to rest");
-    require(morphIndex("swirl") == 2 && morphIndex("nope") == -1, "morph key lookup");
     bool rejected = false;
     try {
         p.launch(NAN, 1, 0, 50, false);

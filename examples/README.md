@@ -30,19 +30,6 @@
 
 Значения `magnitude` в диапазоне −1.3333…1.3333 (в шейдере это не проценты).
 
-## Мемные морфы (эффекты)
-
-Отдельно от 15 параметров есть 6 мемных морфов: `big_head`, `squash`, `swirl`, `melt`,
-`mirror`, `tilt` (или `effectId` 0..5). Сила в диапазоне −1..1, накопительная.
-
-- `ListEffects` — каталог (адрес фильтра не нужен).
-- `EnableEffect` — `effect`/`effectId` + `enabled` (bool).
-- `SetEffect` / `AddEffect` — `effect`/`effectId` + `value` (+ опц. `durationMs`, `easing`,
-  `returnToZero`).
-
-Пример накопительного всплеска — [add-effect.json](add-effect.json); состояние всех морфов
-приходит в `Get` в поле `effects`.
-
 ## Envelope
 
 Общий конверт (обычное сообщение протокола OBS WebSocket, `op: 6`):

@@ -5,7 +5,7 @@ at three anchors on **every** detected face. It is opt-in and costs nothing when
 
 ## What it does
 
-When **Face tracking** is on and a point magnitude or a meme morph is non-zero, the filter:
+When **Face tracking** is on and a point magnitude is non-zero, the filter:
 
 1. Grabs a **small, downscaled** frame of its own input (default 180 px high) a few times per
    second (default 10 FPS) - not once per rendered frame.
@@ -45,23 +45,23 @@ pixel shader loops over them. See `data/face-points.effect`. The classic fixed 6
 
 ## Independent effects: face blur and debug
 
-Blur and debug are **separate options that do not depend on the morph** (the point-magnitude
-distortion) and can be combined with it. They are plain booleans, exposed in the properties, the
+Blur and debug are **separate options that do not depend on the distortion** (the point-magnitude
+warp) and can be combined with it. They are plain booleans, exposed in the properties, the
 dock and `FaceTrack`.
 
 | Setting | Default | Behaviour |
 |---|---|---|
 | `effect_blur` | off | Blur the **whole detected face box** (feathered at the edge), independent of the distortion |
 | `face_blur_px` | 24 | Blur radius in pixels (2..128); larger = stronger/softer cover |
-| `effect_debug` | off | Overlay **everything the tracker produced** with thin lines: the detection box, the **eye axis** (yellow - its angle is the head roll), the **face vertical axis** eye->nose->mouth (cyan), a **head-pose gizmo** at the nose (red = face right, green = face down, blue = into the scene, so yaw shows as the blue axis appears) and the point anchors (1 red = eyes, 2 green = nose, 3 blue = mouth) plus the five raw landmarks (right eye yellow, left eye cyan, nose tip magenta, right mouth orange, left mouth violet) |
+| `effect_debug` | off | Overlay the detection box (light grey outline) and the three point anchors: red = eyes, green = nose, blue = mouth |
 | `face_scale` | on | Scale each point's `radius` and `offset` by the detected **face height**, so a distant face gets proportionally smaller points (adapts to size) |
 
 * **Face blur** now uses the face **box** (cx, cy, w, h), not the small point circles, so the face is
   actually covered. It is a cheap fixed 25-tap blur restricted to the box.
 * **Debug** shows the points even when every magnitude is 0.
-* Both keep the filter active even with the morph at rest (they never take the zero-work fast path
+* Both keep the filter active even with the distortion at rest (they never take the zero-work fast path
   when on and a face is present).
-* Shader order: morph (distortion, driven by magnitudes) -> face blur -> debug overlay. All three
+* Shader order: distortion (driven by magnitudes) -> face blur -> debug overlay. All three
   read the same smoothed per-face tracks.
 
 ## Why this is cheap

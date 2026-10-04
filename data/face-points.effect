@@ -13,26 +13,16 @@ uniform int zone_count = 0;
 uniform float4 zone_data[24];
 // Independent options that can be combined with the distortion:
 //   blur_faces   - blur the whole detected face box
-//   debug_points - overlay coloured markers on the face points
+//   debug_points - overlay the detection box and the three point anchors (eyes / nose / mouth)
 uniform bool blur_faces = false;
 uniform float blur_px = 24.0;
 uniform int face_count = 0;
 uniform float4 face_box[8];       // cx, cy, w, h (percent of frame)
-// Head orientation per face, radians. Stored in a float4 array on purpose: OBS' effect framework
-// mis-packs scalar arrays (float x[N]) and that corrupts neighbouring uniforms.
-//   .x = roll (from the eye axis), .y = yaw, .z = pitch
-uniform float4 face_roll[8];
 uniform bool debug_points = false;
 uniform int marker_count = 0;
-// x, y (centre %), z (size %), w (marker index): 0..2 = point anchors, 3..7 = raw landmarks.
-// Sized for maxFaces (8) x (3 anchors + 5 landmarks). Keep in sync with opa::maxMarkers.
-uniform float4 marker_data[64];
-// Per-face raw landmark geometry for the debug overlay, 3 float4 per face:
-//   [0] = (rightEyeX, rightEyeY, leftEyeX, leftEyeY)
-//   [1] = (noseX, noseY, rightMouthX, rightMouthY)
-//   [2] = (leftMouthX, leftMouthY, hasLandmarks (0/1), unused)
-// Sized for maxFaces (8) x 3. Keep in sync with opa::maxFaces.
-uniform float4 face_lm[24];
+// x, y (centre %), z (size %), w (marker index): 0 = eyes, 1 = nose, 2 = mouth.
+// Sized for maxFaces (8) x 3 anchors. Keep in sync with opa::maxMarkers.
+uniform float4 marker_data[24];
 
 sampler_state textureSampler {
     Filter = Linear;
@@ -91,35 +81,15 @@ float2 distortZone(
 }
 
 // ------------------------------------------------------------
-// Debug marker colours: 0..2 = point anchors (eyes / nose / mouth),
-// 3..7 = raw YuNet landmarks (right eye, left eye, nose tip, right mouth, left mouth).
+// Debug marker colours: 0 = eyes, 1 = nose, 2 = mouth.
 // ------------------------------------------------------------
 float3 markerColor(int idx)
 {
     if (idx == 0)
-        return float3(1.0, 0.25, 0.25); // eyes          - red
+        return float3(1.0, 0.25, 0.25); // eyes  - red
     if (idx == 1)
-        return float3(0.25, 1.0, 0.25); // nose          - green
-    if (idx == 2)
-        return float3(0.3, 0.6, 1.0); // mouth         - blue
-    if (idx == 3)
-        return float3(1.0, 0.85, 0.15); // right eye      - yellow
-    if (idx == 4)
-        return float3(0.15, 0.85, 1.0); // left eye       - cyan
-    if (idx == 5)
-        return float3(1.0, 0.3, 0.9); // nose tip        - magenta
-    if (idx == 6)
-        return float3(1.0, 0.55, 0.1); // right mouth     - orange
-    return float3(0.7, 0.4, 1.0);      // left mouth      - violet
-}
-
-// Soft mask of a line segment a..b (used for the head-roll indicator).
-float segMask(float2 p, float2 a, float2 b, float w)
-{
-    float2 pa = p - a;
-    float2 ba = b - a;
-    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.000001), 0.0, 1.0);
-    return 1.0 - smoothstep(0.0, w, length(pa - ba * h));
+        return float3(0.25, 1.0, 0.25); // nose  - green
+    return float3(0.3, 0.6, 1.0);       // mouth - blue
 }
 
 // Soft outline of an axis-aligned rectangle centred at c with half-extents half (signed distance).
@@ -128,20 +98,6 @@ float rectOutline(float2 p, float2 c, float2 half, float w)
     float2 d = abs(p - c) - half;
     float dist = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
     return 1.0 - smoothstep(0.0, w, abs(dist));
-}
-
-// Rotation matrix from the solvePnP Euler angles: R = Rz(roll) * Ry(yaw) * Rx(pitch). This is the
-// exact inverse of the decomposition used on the CPU (src/head_pose.hpp), so R's columns are the
-// head's local x (right), y (down) and z (into the scene) axes expressed in camera/image space.
-float3x3 headRotation(float roll, float yaw, float pitch)
-{
-    float cr = cos(roll),  sr = sin(roll);
-    float cy = cos(yaw),   sy = sin(yaw);
-    float cp = cos(pitch), sp = sin(pitch);
-    float3x3 Rz = float3x3(cr, -sr, 0.0,  sr, cr, 0.0,  0.0, 0.0, 1.0);
-    float3x3 Ry = float3x3(cy, 0.0, sy,   0.0, 1.0, 0.0, -sy, 0.0, cy);
-    float3x3 Rx = float3x3(1.0, 0.0, 0.0,  0.0, cp, -sp,  0.0, sp, cp);
-    return mul(mul(Rz, Ry), Rx);
 }
 
 // ------------------------------------------------------------
@@ -159,7 +115,7 @@ float4 mainImage(VertData v_in) : TARGET
     float2 correctedUV = uv;
     correctedUV.x /= ar;
 
-    // ---------- MORPH (distortion): independent, driven by the point magnitudes ----------
+    // ---------- DISTORTION: independent, driven by the point magnitudes ----------
     for (int i = 0; i < zone_count; i++)
     {
         float4 z = zone_data[i];
@@ -171,7 +127,7 @@ float4 mainImage(VertData v_in) : TARGET
         correctedUV = distortZone(correctedUV, center, z.z / 100.0, mag);
     }
 
-    // Sample the (morph-applied) image. correctedUV is aspect-corrected, so undo x for sampling.
+    // Sample the (distortion-applied) image. correctedUV is aspect-corrected, so undo x for sampling.
     float2 sampleUV = float2(correctedUV.x * ar, correctedUV.y);
     float4 color = image.Sample(textureSampler, sampleUV);
 
@@ -217,12 +173,8 @@ float4 mainImage(VertData v_in) : TARGET
             float3 col = markerColor(idx);
             color.rgb = lerp(color.rgb, col, clamp(ring * 0.45 + dot, 0.0, 1.0));
         }
-        // Per-face geometry so everything the tracker produced is visible at a glance:
-        //   1. detection box                    (light grey outline)
-        //   2. eye axis right-eye -> left-eye   (bright yellow)   - this line's angle IS the roll
-        //   3. face vertical axis eyeMid -> nose -> mouthMid (cyan) - roll + pitch of the face plane
-        //   4. head pose gizmo at the nose, foreshortened so yaw shows up as the z-axis appears:
-        //        local x = right (red), local y = down (green), local z = into the scene (blue)
+        // Per-face detection box (light grey outline). The three point anchors are drawn as
+        // markers above; debug mode overlays nothing else.
         for (int f = 0; f < face_count; f++)
         {
             float4 b = face_box[f]; // b = (cx, cy, w, h), percent of frame
@@ -232,62 +184,9 @@ float4 mainImage(VertData v_in) : TARGET
             he.x /= ar;
             float lineW = max(b.w, 1.0) / 100.0 * 0.006; // thin lines
 
-            // 1) detection box outline
+            // detection box outline
             color.rgb = lerp(color.rgb, float3(0.85, 0.85, 0.9),
                              rectOutline(correctedUV, c, he, max(lineW, 0.0012)) * 0.5);
-
-            float4 lm0 = face_lm[f * 3 + 0];
-            float4 lm1 = face_lm[f * 3 + 1];
-            float4 lm2 = face_lm[f * 3 + 2];
-            if (lm2.z > 0.5) // landmarks available
-            {
-                float2 re = float2(lm0.x, lm0.y) / 100.0; re.x /= ar;   // right eye (image-left)
-                float2 le = float2(lm0.z, lm0.w) / 100.0; le.x /= ar;   // left eye (image-right)
-                float2 nt = float2(lm1.x, lm1.y) / 100.0; nt.x /= ar;   // nose tip
-                float2 rm = float2(lm1.z, lm1.w) / 100.0; rm.x /= ar;   // right mouth
-                float2 lmo = float2(lm2.x, lm2.y) / 100.0; lmo.x /= ar; // left mouth
-                float2 emid = (re + le) * 0.5;
-                float2 mmid = (rm + lmo) * 0.5;
-
-                // 2) eye axis (yellow) - the in-plane roll is literally this line's angle
-                float eyeLen = max(b.w, 1.0) / 100.0 * 0.35;
-                float2 edir = normalize(le - re + float2(0.00001, 0.00001)) * eyeLen;
-                float eyeM = segMask(correctedUV, emid - edir, emid + edir, lineW * 1.6);
-                color.rgb = lerp(color.rgb, float3(1.0, 0.9, 0.1), clamp(eyeM, 0.0, 1.0));
-
-                // 3) face vertical axis (cyan): eyeMid -> nose -> mouthMid
-                float vM = max(segMask(correctedUV, emid, nt, lineW * 1.2),
-                               segMask(correctedUV, nt, mmid, lineW * 1.2));
-                color.rgb = lerp(color.rgb, float3(0.1, 0.9, 1.0), clamp(vM * 0.9, 0.0, 1.0));
-
-                // 4) head pose gizmo at the nose (foreshortened projection of R's columns)
-                float4 rot = face_roll[f];
-                float3x3 R = headRotation(rot.x, rot.y, rot.z);
-                float al = max(b.w, 1.0) / 100.0 * 0.5;
-                float2 gx = float2(R[0][0], R[1][0]) * al; // local x (right)
-                float2 gy = float2(R[0][1], R[1][1]) * al; // local y (down)
-                float2 gz = float2(R[0][2], R[1][2]) * al; // local z (into the scene)
-                float mX = segMask(correctedUV, nt, nt + gx, lineW * 1.5) *
-                           smoothstep(0.0, 0.2 * al, length(gx));
-                float mY = segMask(correctedUV, nt, nt + gy, lineW * 1.5) *
-                           smoothstep(0.0, 0.2 * al, length(gy));
-                float mZ = segMask(correctedUV, nt, nt + gz, lineW * 1.5) *
-                           smoothstep(0.0, 0.2 * al, length(gz));
-                color.rgb = lerp(color.rgb, float3(1.0, 0.2, 0.2), clamp(mX, 0.0, 1.0));
-                color.rgb = lerp(color.rgb, float3(0.2, 1.0, 0.2), clamp(mY, 0.0, 1.0));
-                color.rgb = lerp(color.rgb, float3(0.35, 0.5, 1.0), clamp(mZ, 0.0, 1.0));
-            }
-            else
-            {
-                // No landmarks: fall back to a bright roll tape through the box centre so the head
-                // roll (from the eye axis computed on the CPU) is still visible.
-                float tapeR = max(b.z, 1.0) / 100.0 * 0.55;
-                float tapeW = max(b.w, 1.0) / 100.0 * 0.035;
-                float rol = face_roll[f].x;
-                float2 ax = float2(cos(rol), sin(rol)) * tapeR;
-                float m = segMask(correctedUV, c - ax, c + ax, tapeW);
-                color.rgb = lerp(color.rgb, float3(1.0, 0.95, 0.1), clamp(m, 0.0, 1.0));
-            }
         }
     }
 

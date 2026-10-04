@@ -57,17 +57,6 @@ class AnimatorPanel : public QWidget {
     QLineEdit *logFilter = nullptr;
     QCheckBox *pause = nullptr;
 
-    // Meme morphs tab.
-    QComboBox *fxBox = nullptr;
-    QCheckBox *fxEnabledBox = nullptr;
-    QSlider *fxSld = nullptr;
-    QDoubleSpinBox *fxSpin = nullptr, *fxDurSpin = nullptr, *fxHoldSpin = nullptr, *fxReturnSpin = nullptr;
-    QComboBox *fxEasing = nullptr;
-    QCheckBox *fxAutoReturn = nullptr;
-    QLabel *fxHint = nullptr;
-    std::array<bool, morphCount> fxEnabled_{};
-    std::array<double, morphCount> fxValue_{};
-
     QTimer *pushTimer = nullptr;
     QTabWidget *tabs = nullptr;
     bool updating = false;
@@ -97,7 +86,6 @@ class AnimatorPanel : public QWidget {
             v.radius = obs_data_get_double(s, (k + "radius").c_str());
             v.magnitude = obs_data_get_double(s, (k + "magnitude").c_str());
         }
-        pullMorphs(s);
         updating = true;
         modeBox->setCurrentIndex(std::clamp((int)obs_data_get_int(s, "mode"), 0, 2));
         faceBox->setChecked(obs_data_get_bool(s, "face_tracking"));
@@ -122,7 +110,6 @@ class AnimatorPanel : public QWidget {
         obs_data_release(s);
         obs_source_release(f);
         syncControls();
-        syncMorphControls();
     }
 
     // Writes the three points' rest values and mirrors them into target/return, so Start and the
@@ -371,90 +358,6 @@ class AnimatorPanel : public QWidget {
         updating = false;
     }
 
-    // ---- meme morphs ----
-    static std::string fxPrefix(int i) { return std::string("morph_") + morphKey(i); }
-    void pullMorphs(obs_data_t *s) {
-        for (int i = 0; i < morphCount; ++i) {
-            const auto k = fxPrefix(i);
-            fxEnabled_[i] = obs_data_get_bool(s, (k + "_enabled").c_str());
-            fxValue_[i] = obs_data_get_double(s, (k + "_value").c_str());
-        }
-    }
-    // Writes the current morph's settings; value/target/return share the rest value so Add eases
-    // back to it, mirroring the point magnitude behaviour.
-    void writeMorphLocked(obs_data_t *s, int i) {
-        const auto k = fxPrefix(i);
-        obs_data_set_bool(s, (k + "_enabled").c_str(), fxEnabled_[i]);
-        obs_data_set_double(s, (k + "_value").c_str(), fxValue_[i]);
-        obs_data_set_double(s, (k + "_target").c_str(), fxValue_[i]);
-        obs_data_set_double(s, (k + "_return_value").c_str(), fxValue_[i]);
-        obs_data_set_double(s, (k + "_duration_ms").c_str(), fxDurSpin->value());
-        obs_data_set_int(s, (k + "_easing").c_str(), fxEasing->currentIndex());
-        obs_data_set_bool(s, (k + "_auto_return").c_str(), fxAutoReturn->isChecked());
-        obs_data_set_double(s, (k + "_hold_ms").c_str(), fxHoldSpin->value());
-        obs_data_set_double(s, (k + "_return_ms").c_str(), fxReturnSpin->value());
-        obs_data_set_int(s, (k + "_return_easing").c_str(), fxEasing->currentIndex());
-    }
-    void pushMorph() {
-        if (updating)
-            return;
-        obs_source_t *f = resolve();
-        if (!f)
-            return;
-        obs_data_t *s = obs_source_get_settings(f);
-        writeMorphLocked(s, fxBox->currentIndex());
-        obs_source_update(f, s);
-        obs_data_release(s);
-        obs_source_release(f);
-    }
-    void fxTest(const std::string &action) {
-        if (updating)
-            return;
-        try {
-            auto e = selected.lock();
-            if (!e)
-                throw std::runtime_error(
-                    "No filter selected. Add the Face Points filter to a source, then press Refresh.");
-            if (obs_source_t *f = resolve()) {
-                obs_data_t *s = obs_source_get_settings(f);
-                writeMorphLocked(s, fxBox->currentIndex());
-                obs_source_update(f, s);
-                obs_data_release(s);
-                obs_source_release(f);
-            }
-            e->commandMorph(fxBox->currentIndex(), action, fxSpin->value(),
-                            fxDurSpin->value() / 1000.0, fxEasing->currentIndex(), -1);
-        } catch (const std::exception &ex) {
-            QMessageBox::warning(this, "Parameter Animator", ex.what());
-        }
-        refresh();
-    }
-    void applyPreset(int morph, double strength) {
-        if (morph < 0 || morph >= morphCount)
-            return;
-        fxBox->setCurrentIndex(morph);
-        fxEnabled_[morph] = true;
-        fxValue_[morph] = strength;
-        syncMorphControls();
-        pushMorph();
-        fxTest("Set");
-    }
-    void syncMorphControls() {
-        if (!fxBox)
-            return;
-        updating = true;
-        const int i = fxBox->currentIndex();
-        fxEnabledBox->setChecked(fxEnabled_[i]);
-        fxSld->setValue((int)std::lround(fxValue_[i] * 1000));
-        fxSpin->setValue(fxValue_[i]);
-        const QString h = QStringLiteral(
-            "Strength is animated and cumulative: Add stacks on every call, then eases back after "
-            "the hold. Enable several morphs to run them in parallel on every detected face.");
-        if (fxHint->text() != h)
-            fxHint->setText(h);
-        updating = false;
-    }
-
   public:
     explicit AnimatorPanel(QWidget *parent) : QWidget(parent) {
         auto *root = new QVBoxLayout(this);
@@ -484,19 +387,14 @@ class AnimatorPanel : public QWidget {
         modeRow->addStretch(1);
         vl->addLayout(modeRow);
 
-        // Blur and debug are independent of the morph, so they are plain checkboxes.
+        // Blur and debug are independent of the point distortion, so they are plain checkboxes.
         auto *renderRow = new QHBoxLayout;
         blurBox = new QCheckBox("Blur faces");
         blurBox->setToolTip("Blur the whole detected face box (covers/anonimises the face). "
                             "Independent of the distortion.");
         debugBox = new QCheckBox("Debug points");
-        debugBox->setToolTip("Overlay everything the tracker produced: the detection box, the eye "
-                             "axis (yellow - its angle is the head roll), the face vertical axis "
-                             "eye->nose->mouth (cyan), a head-pose gizmo at the nose (red = face "
-                             "right, green = face down, blue = into the scene) and the point anchors "
-                             "(red = eyes, green = nose, blue = mouth) plus the raw landmarks "
-                             "(yellow / cyan = eyes, magenta = nose tip, orange / violet = mouth "
-                             "corners). Independent of the distortion.");
+        debugBox->setToolTip("Overlay the detection box and the three point anchors: red = eyes, "
+                             "green = nose, blue = mouth. Independent of the distortion.");
         blurPxSpin = new QDoubleSpinBox;
         blurPxSpin->setRange(2, 128);
         blurPxSpin->setSuffix(" px");
@@ -668,118 +566,6 @@ class AnimatorPanel : public QWidget {
         visualScroll->setWidget(visual);
         tabs->addTab(visualScroll, "Visual");
 
-        // ============================ MEME MORPHS ============================
-        auto *fx = new QWidget;
-        auto *fl = new QVBoxLayout(fx);
-        fl->setContentsMargins(6, 6, 6, 6);
-        fl->setSpacing(6);
-        auto *fxRow = new QHBoxLayout;
-        fxRow->addWidget(new QLabel("Effect:"));
-        fxBox = new QComboBox;
-        for (int i = 0; i < morphCount; ++i)
-            fxBox->addItem(morphName(i));
-        fxRow->addWidget(fxBox);
-        fxEnabledBox = new QCheckBox("enabled");
-        fxRow->addWidget(fxEnabledBox);
-        fxRow->addStretch(1);
-        fl->addLayout(fxRow);
-
-        auto *fxGrid = new QGridLayout;
-        fxGrid->setVerticalSpacing(2);
-        fxGrid->setHorizontalSpacing(6);
-        fxGrid->addWidget(new QLabel("Strength"), 0, 0);
-        fxSld = new QSlider(Qt::Horizontal);
-        fxSld->setRange(-1000, 1000);
-        fxGrid->addWidget(fxSld, 0, 1);
-        fxSpin = new QDoubleSpinBox;
-        fxSpin->setRange(-1, 1);
-        fxSpin->setDecimals(3);
-        fxSpin->setSingleStep(0.05);
-        fxSpin->setFixedWidth(92);
-        fxGrid->addWidget(fxSpin, 0, 2);
-        fl->addLayout(fxGrid);
-
-        auto *fxTiming = new QGroupBox("Timing (cumulative Add)");
-        auto *ftg = new QGridLayout(fxTiming);
-        ftg->setVerticalSpacing(2);
-        ftg->setHorizontalSpacing(6);
-        fxDurSpin = new QDoubleSpinBox;
-        fxDurSpin->setRange(-1, 3600000);
-        fxDurSpin->setSuffix(" ms");
-        fxDurSpin->setValue(500);
-        fxDurSpin->setFixedWidth(110);
-        ftg->addWidget(new QLabel("Move duration"), 0, 0);
-        ftg->addWidget(fxDurSpin, 0, 1);
-        fxEasing = new QComboBox;
-        for (auto *n : easingNames)
-            fxEasing->addItem(n);
-        fxEasing->setCurrentIndex(5);
-        ftg->addWidget(new QLabel("Move easing"), 0, 2);
-        ftg->addWidget(fxEasing, 0, 3);
-        fxAutoReturn = new QCheckBox("auto return");
-        fxAutoReturn->setChecked(true);
-        ftg->addWidget(fxAutoReturn, 0, 4);
-        fxHoldSpin = new QDoubleSpinBox;
-        fxHoldSpin->setRange(0, 3600000);
-        fxHoldSpin->setSuffix(" ms");
-        fxHoldSpin->setValue(200);
-        fxHoldSpin->setFixedWidth(110);
-        ftg->addWidget(new QLabel("Return delay after the last Add"), 1, 0);
-        ftg->addWidget(fxHoldSpin, 1, 1);
-        fxReturnSpin = new QDoubleSpinBox;
-        fxReturnSpin->setRange(0, 3600000);
-        fxReturnSpin->setSuffix(" ms");
-        fxReturnSpin->setValue(800);
-        fxReturnSpin->setFixedWidth(110);
-        ftg->addWidget(new QLabel("Return duration"), 1, 2);
-        ftg->addWidget(fxReturnSpin, 1, 3);
-        fl->addWidget(fxTiming);
-
-        auto *fxButtons = new QHBoxLayout;
-        auto *fxAdd = new QPushButton("Add (accumulate)");
-        auto *fxSet = new QPushButton("Set");
-        auto *fxStart = new QPushButton("Start saved");
-        auto *fxStop = new QPushButton("Stop");
-        auto *fxReset = new QPushButton("Back to rest");
-        for (auto *b : {fxAdd, fxSet, fxStart, fxStop, fxReset})
-            fxButtons->addWidget(b);
-        fxButtons->addStretch(1);
-        fl->addLayout(fxButtons);
-
-        // One-click presets: enable the morph and set a nice strength in one go.
-        auto *presetBox = new QGroupBox("Presets");
-        auto *pg = new QGridLayout(presetBox);
-        struct Preset {
-            const char *label;
-            int morph;
-            double value;
-        };
-        const Preset presets[] = {{"Big head", 0, 0.6},   {"Small head", 0, -0.5}, {"Wide face", 1, 0.5},
-                                  {"Tall face", 1, -0.5}, {"Swirl", 2, 0.7},       {"Melt", 3, 0.6},
-                                  {"Mirror", 4, 1.0},     {"Tilt left", 5, -0.5},  {"Tilt right", 5, 0.5}};
-        int pr = 0, pc = 0;
-        for (const auto &p : presets) {
-            auto *b = new QPushButton(p.label);
-            connect(b, &QPushButton::clicked, this,
-                    [this, morph = p.morph, strength = p.value] { applyPreset(morph, strength); });
-            pg->addWidget(b, pr, pc);
-            if (++pc == 3) {
-                pc = 0;
-                ++pr;
-            }
-        }
-        fl->addWidget(presetBox);
-
-        fxHint = new QLabel;
-        fxHint->setWordWrap(true);
-        fl->addWidget(fxHint);
-        fl->addStretch(1);
-        auto *fxScroll = new QScrollArea;
-        fxScroll->setWidgetResizable(true);
-        fxScroll->setFrameShape(QFrame::NoFrame);
-        fxScroll->setWidget(fx);
-        tabs->addTab(fxScroll, "Meme morphs");
-
         // ============================ TABLE ============================
         auto *tablePage = new QWidget;
         auto *tl = new QVBoxLayout(tablePage);
@@ -857,38 +643,6 @@ class AnimatorPanel : public QWidget {
         connect(copy, &QPushButton::clicked, this,
                 [this] { QApplication::clipboard()->setText(logs->toPlainText()); });
         connect(refreshBtn, &QPushButton::clicked, this, [this] { reload(); });
-        // Meme morphs.
-        connect(fxBox, qOverload<int>(&QComboBox::currentIndexChanged), this,
-                [this](int) { if (!updating) syncMorphControls(); });
-        connect(fxEnabledBox, &QCheckBox::toggled, this, [this](bool on) {
-            if (updating)
-                return;
-            fxEnabled_[fxBox->currentIndex()] = on;
-            pushMorph();
-        });
-        connect(fxSld, &QSlider::valueChanged, this, [this](int v) {
-            if (updating)
-                return;
-            fxValue_[fxBox->currentIndex()] = v / 1000.0;
-            updating = true;
-            fxSpin->setValue(v / 1000.0);
-            updating = false;
-            pushMorph();
-        });
-        connect(fxSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double v) {
-            if (updating)
-                return;
-            fxValue_[fxBox->currentIndex()] = v;
-            updating = true;
-            fxSld->setValue((int)std::lround(v * 1000));
-            updating = false;
-            pushMorph();
-        });
-        connect(fxAdd, &QPushButton::clicked, this, [this] { fxTest("Add"); });
-        connect(fxSet, &QPushButton::clicked, this, [this] { fxTest("Set"); });
-        connect(fxStart, &QPushButton::clicked, this, [this] { fxTest("Start"); });
-        connect(fxStop, &QPushButton::clicked, this, [this] { fxTest("Stop"); });
-        connect(fxReset, &QPushButton::clicked, this, [this] { fxTest("Reset"); });
         connect(filters, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { select(); });
         connect(pushTimer, &QTimer::timeout, this, [this] { pushSet(); });
         connect(pointBox, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
