@@ -679,9 +679,28 @@ static void render(void *v, gs_effect_t *) {
             FaceTracker::Result r;
             if (e.tracker)
                 r = e.tracker->result();
-            blog(LOG_INFO, "[OPA] face: tracking=%d available=%d faces=%d seq=%llu detect=%.1fms",
-                 (int)e.faceTracking, (int)avail, (int)r.faces.size(),
-                 (unsigned long long)r.sequence, r.detectMs);
+            // Raw (unsmoothed) landmark of the first detection plus the smoothed track landmark,
+            // so the log shows whether the detector updates them and whether the track follows.
+            double rx = 0, ry = 0, nx = 0, ny = 0, tx = 0, ty = 0;
+            bool lv = false, tvalid = false;
+            if (!r.faces.empty()) {
+                lv = r.faces[0].landmarkValid;
+                rx = r.faces[0].landmark[0].x;
+                ry = r.faces[0].landmark[0].y;
+                nx = r.faces[0].landmark[2].x;
+                ny = r.faces[0].landmark[2].y;
+            }
+            {
+                std::lock_guard lock(e.mutex);
+                tvalid = e.tracks[0].valid;
+                tx = e.tracks[0].landmarks[0].x;
+                ty = e.tracks[0].landmarks[0].y;
+            }
+            blog(LOG_INFO,
+                 "[OPA] face: tracking=%d available=%d faces=%d seq=%llu detect=%.1fms | RAW lmValid=%d "
+                 "reye=(%.1f,%.1f) nose=(%.1f,%.1f) | TRACK valid=%d reye=(%.1f,%.1f)",
+                 (int)e.faceTracking, (int)avail, (int)r.faces.size(), (unsigned long long)r.sequence,
+                 r.detectMs, (int)lv, rx, ry, nx, ny, (int)tvalid, tx, ty);
         }
     }
     // From the smoothed tracks build: distortion zones, debug markers and blur face boxes.
