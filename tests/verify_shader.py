@@ -23,7 +23,7 @@ assert 'blur_faces' in fp and 'debug_points' in fp, 'blur/debug options missing'
 assert 'uniform float4 face_box[' in fp and 'uniform float4 marker_data[' in fp, 'blur/debug arrays missing'
 assert 'uniform float4 marker_data[24]' in fp, 'marker array changed'
 assert 'uniform float morph_value[' in fp and 'uniform int morph_count' in fp, 'meme morph uniforms missing'
-assert 'morphUV(' in fp and 'MEME MORPHS' in fp, 'meme morph warp missing'
+assert 'morphBigHead(' in fp and 'MEME MORPHS' in fp, 'meme morph warp missing'
 # The effect compiles as HLSL for D3D11, not GLSL: GLSL-only intrinsics fail at runtime with
 # "undeclared identifier". Keep them out (use lerp instead of mix, etc.).
 for glsl_only in ('mix(', 'fract(', 'texture('):

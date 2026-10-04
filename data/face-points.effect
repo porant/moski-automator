@@ -96,50 +96,56 @@ float2 rotateUV(float2 p, float a)
     return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
-float2 morphUV(float2 uv, int type, float2 c, float2 bx, float v)
+// Each morph is a small, self-contained UV remap about the face centre `c`. `v` is a signed
+// strength; |v| < 0.0005 is a no-op. Kept as separate functions (no int dispatch) so the compiler
+// generates simple, independent code paths.
+float2 morphBigHead(float2 uv, float2 c, float v)
 {
-    float2 result = uv;
-    if (abs(v) >= 0.0005)
-    {
-        float2 p = uv - c;
-        if (type == 0)
-        {
-            // Big head: uniform zoom about the face centre (v > 0 enlarges, v < 0 shrinks).
-            p /= max(0.2, 1.0 + 0.6 * v);
-            result = c + p;
-        }
-        else if (type == 1)
-        {
-            // Squash / stretch: non-uniform scale (v > 0 widens, v < 0 makes the face taller).
-            float k = 0.45 * v;
-            result = c + p * float2(1.0 - k, 1.0 + k);
-        }
-        else if (type == 2)
-        {
-            // Swirl: rotate more toward the centre of the face.
-            float d = clamp(length(p) / max(bx.x, 0.0001), 0.0, 1.0);
-            result = c + rotateUV(p, v * 1.6 * (1.0 - d));
-        }
-        else if (type == 3)
-        {
-            // Melt: sag downward, stronger toward the chin.
-            float top = c.y - bx.y;
-            float rel = clamp((uv.y - top) / max(2.0 * bx.y, 0.0001), 0.0, 1.0);
-            result = float2(uv.x, uv.y - v * rel * bx.y * 0.9);
-        }
-        else if (type == 4)
-        {
-            // Mirror: flip the face horizontally (acts as an on/off warp).
-            float m = step(0.5, abs(v));
-            result = c + float2(lerp(p.x, -p.x, m), p.y);
-        }
-        else if (type == 5)
-        {
-            // Tilt: rotate the whole face region.
-            result = c + rotateUV(p, v * 0.6);
-        }
-    }
-    return result;
+    if (abs(v) < 0.0005)
+        return uv;
+    return c + (uv - c) / max(0.2, 1.0 + 0.6 * v);
+}
+
+float2 morphSquash(float2 uv, float2 c, float v)
+{
+    if (abs(v) < 0.0005)
+        return uv;
+    float k = 0.45 * v;
+    return c + (uv - c) * float2(1.0 - k, 1.0 + k);
+}
+
+float2 morphSwirl(float2 uv, float2 c, float2 bx, float v)
+{
+    if (abs(v) < 0.0005)
+        return uv;
+    float2 p = uv - c;
+    float d = clamp(length(p) / max(bx.x, 0.0001), 0.0, 1.0);
+    return c + rotateUV(p, v * 1.6 * (1.0 - d));
+}
+
+float2 morphMelt(float2 uv, float2 c, float2 bx, float v)
+{
+    if (abs(v) < 0.0005)
+        return uv;
+    float top = c.y - bx.y;
+    float rel = clamp((uv.y - top) / max(2.0 * bx.y, 0.0001), 0.0, 1.0);
+    return float2(uv.x, uv.y - v * rel * bx.y * 0.9);
+}
+
+float2 morphMirror(float2 uv, float2 c, float v)
+{
+    if (abs(v) < 0.0005)
+        return uv;
+    float2 p = uv - c;
+    float m = step(0.5, abs(v));
+    return c + float2(lerp(p.x, -p.x, m), p.y);
+}
+
+float2 morphTilt(float2 uv, float2 c, float v)
+{
+    if (abs(v) < 0.0005)
+        return uv;
+    return c + rotateUV(uv - c, v * 0.6);
 }
 
 // ------------------------------------------------------------
@@ -173,10 +179,8 @@ float4 mainImage(VertData v_in) : TARGET
     // morph_count is 0 unless a morph is enabled, so this costs nothing when morphs are off.
     if (morph_count > 0)
     {
-        for (int fi = 0; fi < 8; fi++) // 8 = maxFaces; fixed bound keeps the loop compiler-friendly
+        for (int fi = 0; fi < morph_count; fi++)
         {
-            if (fi >= morph_count)
-                break;
             float4 b = face_box[fi];
             float2 c = float2(b.x / 100.0, b.y / 100.0);
             c.x /= ar;
@@ -188,12 +192,12 @@ float4 mainImage(VertData v_in) : TARGET
             if (region > 0.0)
             {
                 float2 warped = correctedUV;
-                warped = morphUV(warped, 0, c, bx, morph_value[0]);
-                warped = morphUV(warped, 1, c, bx, morph_value[1]);
-                warped = morphUV(warped, 2, c, bx, morph_value[2]);
-                warped = morphUV(warped, 3, c, bx, morph_value[3]);
-                warped = morphUV(warped, 4, c, bx, morph_value[4]);
-                warped = morphUV(warped, 5, c, bx, morph_value[5]);
+                warped = morphBigHead(warped, c, morph_value[0]);
+                warped = morphSquash(warped, c, morph_value[1]);
+                warped = morphSwirl(warped, c, bx, morph_value[2]);
+                warped = morphMelt(warped, c, bx, morph_value[3]);
+                warped = morphMirror(warped, c, morph_value[4]);
+                warped = morphTilt(warped, c, morph_value[5]);
                 correctedUV = lerp(correctedUV, warped, region);
             }
         }
