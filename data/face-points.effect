@@ -1,0 +1,249 @@
+// Dynamic face-point distortion: one circular zone per (detected face x enabled point).
+// The CPU fills zone_data[] with up to MAX_ZONES entries (x/y centre percent, radius percent,
+// magnitude) and the pixel shader applies the original distortZone math in a loop. The
+// distortZone function and the aspect-correction model are byte-identical to the original
+// 6-zone shader (see data/original-6-zone.effect); only the way zones are enumerated changed.
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 uv_size;
+uniform float elapsed_time;
+uniform bool animate = false;
+uniform int zone_count = 0;
+// Sized for maxFaces (8) x 3 points. Keep in sync with opa::maxZones in src/filter.hpp.
+uniform float4 zone_data[24];
+// Independent options that can be combined with the distortion:
+//   blur_faces   - blur the whole detected face box
+//   debug_points - overlay coloured markers on the face points
+uniform bool blur_faces = false;
+uniform float blur_px = 24.0;
+uniform int face_count = 0;
+uniform float4 face_box[8];       // cx, cy, w, h (percent of frame)
+uniform bool debug_points = false;
+uniform int marker_count = 0;
+uniform float4 marker_data[24];   // x, y (centre %), z (size %), w (point index)
+// Meme morphs: signed strength (-1..1, 0 = off) of BigHead, Squash, Swirl, Melt, Mirror, Tilt,
+// applied to morph_count detected faces. morph_count is 0 unless a morph is active, so this costs
+// nothing when the morphs are off. Keep in sync with opa::morphCount in src/animation.hpp.
+uniform float morph_value[6];
+uniform int morph_count = 0;
+
+sampler_state textureSampler {
+    Filter = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v) {
+    v.pos = mul(float4(v.pos.xyz, 1.0), ViewProj);
+    return v;
+}
+
+// ------------------------------------------------------------
+// Original Radegast Stravinsky zone distortion (unchanged math).
+// ------------------------------------------------------------
+float2 distortZone(
+    float2 uv,
+    float2 center,
+    float radius,
+    float magnitude
+)
+{
+    if (radius <= 0.00001 || magnitude == 0.0)
+        return uv;
+
+    float dist = distance(uv, center);
+    if (dist < radius)
+    {
+        float percent = dist / radius;
+        if (magnitude > 0.0)
+        {
+            uv = (uv - center) *
+                lerp(
+                    1.0,
+                    smoothstep(0.0, radius / max(dist, 0.00001), percent),
+                    magnitude * 0.75
+                );
+        }
+        else
+        {
+            uv = (uv - center) *
+                lerp(
+                    1.0,
+                    pow(percent, 1.0 + magnitude * 0.75) * radius / max(dist, 0.00001),
+                    1.0 - percent
+                );
+        }
+        uv += center;
+    }
+    return uv;
+}
+
+// ------------------------------------------------------------
+// Meme morphs: whole-face geometric warps on the aspect-corrected UVs.
+// Each type is a different remap of the face-region UV; `v` is a signed strength (0 = off), so the
+// CPU can layer several of them on every detected face in this single pass.
+// ------------------------------------------------------------
+float2 rotateUV(float2 p, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+float2 morphUV(float2 uv, int type, float2 c, float2 half, float v)
+{
+    if (abs(v) < 0.0005)
+        return uv;
+    float2 p = uv - c;
+    if (type == 0)
+    {
+        // Big head: uniform zoom about the face centre (v > 0 enlarges, v < 0 shrinks).
+        p /= max(0.2, 1.0 + 0.6 * v);
+    }
+    else if (type == 1)
+    {
+        // Squash / stretch: non-uniform scale (v > 0 widens, v < 0 makes the face taller).
+        float k = 0.45 * v;
+        p *= float2(1.0 - k, 1.0 + k);
+    }
+    else if (type == 2)
+    {
+        // Swirl: rotate more toward the centre of the face.
+        float d = clamp(length(p) / max(half.x, 0.0001), 0.0, 1.0);
+        p = rotateUV(p, v * 1.6 * (1.0 - d));
+    }
+    else if (type == 3)
+    {
+        // Melt: sag downward, stronger toward the chin.
+        float top = c.y - half.y;
+        float rel = clamp((uv.y - top) / max(2.0 * half.y, 0.0001), 0.0, 1.0);
+        uv.y -= v * rel * half.y * 0.9;
+        return uv;
+    }
+    else if (type == 4)
+    {
+        // Mirror: flip the face horizontally (acts as an on/off warp).
+        // NOTE: use lerp, not GLSL's mix - this file compiles as HLSL for D3D11.
+        float m = step(0.5, abs(v));
+        p.x = lerp(p.x, -p.x, m);
+    }
+    else if (type == 5)
+    {
+        // Tilt: rotate the whole face region.
+        p = rotateUV(p, v * 0.6);
+    }
+    return c + p;
+}
+
+// ------------------------------------------------------------
+// MAIN
+// ------------------------------------------------------------
+float4 mainImage(VertData v_in) : TARGET
+{
+    float2 uv = v_in.uv;
+    float2 hw = uv_size;
+
+    // Aspect ratio correction
+    float ar = hw.y / hw.x;
+
+    // Aspect-corrected working space.
+    float2 correctedUV = uv;
+    correctedUV.x /= ar;
+
+    // ---------- MORPH (distortion): independent, driven by the point magnitudes ----------
+    for (int i = 0; i < zone_count; i++)
+    {
+        float4 z = zone_data[i];
+        float2 center = float2(z.x / 100.0, z.y / 100.0);
+        center.x /= ar;
+        float mag = z.w;
+        if (animate)
+            mag *= sin(radians(elapsed_time * 20.0));
+        correctedUV = distortZone(correctedUV, center, z.z / 100.0, mag);
+    }
+
+    // ---------- MEME MORPHS: whole-face warps, applied to every detected face ----------
+    // morph_value[] = BigHead, Squash, Swirl, Melt, Mirror, Tilt (signed strength; 0 = off).
+    // Independent branches: several morphs can be active at once and compose in this single pass.
+    // morph_count is the number of faces to warp, and is 0 unless a morph is active.
+    for (int fi = 0; fi < morph_count; fi++)
+    {
+        float4 b = face_box[fi];
+        float2 c = float2(b.x / 100.0, b.y / 100.0);
+        c.x /= ar;
+        float2 half = float2(b.z / 100.0 * 0.5, b.w / 100.0 * 0.5);
+        half.x /= ar;
+        half *= 1.15; // region a little larger than the box so the warp fades out softly
+        float2 q = (correctedUV - c) / max(half, float2(0.0001, 0.0001));
+        float region = 1.0 - smoothstep(0.7, 1.0, length(q));
+        if (region <= 0.0)
+            continue;
+        float2 warped = correctedUV;
+        for (int mi = 0; mi < 6; mi++)
+            warped = morphUV(warped, mi, c, half, morph_value[mi]);
+        correctedUV = lerp(correctedUV, warped, region);
+    }
+
+    // Sample the (morph-applied) image. correctedUV is aspect-corrected, so undo x for sampling.
+    float2 sampleUV = float2(correctedUV.x * ar, correctedUV.y);
+    float4 color = image.Sample(textureSampler, sampleUV);
+
+    // ---------- FACE BLUR: independent option, blurs the whole face box ----------
+    if (blur_faces && face_count > 0)
+    {
+        float mask = 0.0;
+        for (int i = 0; i < face_count; i++)
+        {
+            float4 b = face_box[i];
+            float2 c = float2(b.x / 100.0, b.y / 100.0);
+            c.x /= ar;
+            float2 half = float2(b.z / 100.0 * 0.5, b.w / 100.0 * 0.5);
+            half.x /= ar;
+            float2 q = (correctedUV - c) / (half * 1.15 + float2(0.0001, 0.0001));
+            mask = max(mask, 1.0 - smoothstep(0.75, 1.0, max(abs(q.x), abs(q.y))));
+        }
+        if (mask > 0.001)
+        {
+            float2 texel = 1.0 / uv_size;
+            float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+            for (int yy = -2; yy <= 2; yy++)
+                for (int xx = -2; xx <= 2; xx++)
+                    sum += image.Sample(textureSampler,
+                                        sampleUV + float2(xx, yy) * blur_px * 0.5 * texel);
+            color = lerp(color, sum / 25.0, mask);
+        }
+    }
+
+    // ---------- DEBUG POINTS: independent option ----------
+    if (debug_points)
+    {
+        for (int i = 0; i < marker_count; i++)
+        {
+            float4 m = marker_data[i];
+            float2 c = float2(m.x / 100.0, m.y / 100.0);
+            c.x /= ar;
+            float size = max(m.z, 0.4) / 100.0;
+            float d = distance(correctedUV, c);
+            float ring = 1.0 - smoothstep(size, size * 1.35, d);
+            float dot = 1.0 - smoothstep(size * 0.35, size * 0.55, d);
+            int idx = (int)m.w;
+            float3 col = idx == 0 ? float3(1.0, 0.25, 0.25)
+                      : (idx == 1 ? float3(0.25, 1.0, 0.25) : float3(0.3, 0.6, 1.0));
+            color.rgb = lerp(color.rgb, col, clamp(ring * 0.45 + dot, 0.0, 1.0));
+        }
+    }
+
+    return color;
+}
+
+technique Draw {
+    pass {
+        vertex_shader = VSDefault(v);
+        pixel_shader = mainImage(v_in);
+    }
+}

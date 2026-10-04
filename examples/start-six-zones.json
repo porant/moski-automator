@@ -1,0 +1,12 @@
+{
+  "op": 6,
+  "d": {
+    "requestType": "CallVendorRequest",
+    "requestId": "start-six-zones",
+    "requestData": {
+      "vendorName": "obs-parameter-animator",
+      "requestType": "StartAll",
+      "requestData": {"source": "CAMERA", "filter": "Distortion"}
+    }
+  }
+}

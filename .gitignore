@@ -1,0 +1,36 @@
+# Build outputs and packaged binaries (keep the repo to source only)
+build/
+stage/
+dist/
+known-good/
+working/
+*.zip
+*.dll
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.obj
+
+# CMake / CTest / Ninja generated files
+CMakeCache.txt
+CMakeFiles/
+Testing/
+cmake_install.cmake
+CTestTestfile.cmake
+DartConfiguration.tcl
+install_manifest.txt
+.ninja_deps
+.ninja_log
+build.ninja
+CMakeConfigureLog.yaml
+
+# Qt deploy helper
+.qt/
+
+# Editors / OS
+.vs/
+.vscode/
+*.user
+Thumbs.db
+Desktop.ini

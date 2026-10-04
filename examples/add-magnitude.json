@@ -1,0 +1,16 @@
+{
+  "op": 6,
+  "d": {
+    "requestType": "CallVendorRequest",
+    "requestId": "add-magnitude",
+    "requestData": {
+      "vendorName": "obs-parameter-animator",
+      "requestType": "Add",
+      "requestData": {
+        "source": "CAMERA", "filter": "Distortion",
+        "parameter": "point1_magnitude", "value": 0.3,
+        "durationMs": 300, "easing": "EaseOutCubic", "returnToZero": true
+      }
+    }
+  }
+}

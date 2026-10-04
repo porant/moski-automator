@@ -1,0 +1,815 @@
+// Standalone libobs wrapper. Original shader follows verbatim.
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 uv_size;
+uniform float elapsed_time;
+sampler_state textureSampler {
+    Filter = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv : TEXCOORD0;
+};
+VertData VSDefault(VertData v) {
+    v.pos = mul(float4(v.pos.xyz, 1.0), ViewProj);
+    return v;
+}
+// BEGIN ORIGINAL SHADER
+// ============================================================
+
+// 6-ZONE DISTORTION SHADER
+
+// Based on the original Radegast Stravinsky distortion shader
+
+// For OBS Shaderfilter
+
+// ============================================================
+
+
+// ============================================================
+
+// GLOBAL
+
+// ============================================================
+
+uniform bool animate = false;
+
+uniform string notes<
+
+    string widget_type = "info";
+
+> = "Six independent circular distortion zones.";
+
+
+// ============================================================
+
+// ZONE 1
+
+// ============================================================
+
+uniform bool zone1_enable = true;
+
+uniform float zone1_center_x<
+
+    string label = "Zone 1 - Center X";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 25.0;
+
+uniform float zone1_center_y<
+
+    string label = "Zone 1 - Center Y";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 25.0;
+
+uniform float zone1_radius<
+
+    string label = "Zone 1 - Radius";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 10.0;
+
+uniform float zone1_magnitude<
+
+    string label = "Zone 1 - Magnitude";
+
+    string widget_type = "slider";
+
+    float minimum = -1.3333;
+
+    float maximum = 1.3333;
+
+    float step = 0.01;
+
+> = 0.0;
+
+
+// ============================================================
+
+// ZONE 2
+
+// ============================================================
+
+uniform bool zone2_enable = true;
+
+uniform float zone2_center_x<
+
+    string label = "Zone 2 - Center X";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 50.0;
+
+uniform float zone2_center_y<
+
+    string label = "Zone 2 - Center Y";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 25.0;
+
+uniform float zone2_radius<
+
+    string label = "Zone 2 - Radius";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 10.0;
+
+uniform float zone2_magnitude<
+
+    string label = "Zone 2 - Magnitude";
+
+    string widget_type = "slider";
+
+    float minimum = -1.3333;
+
+    float maximum = 1.3333;
+
+    float step = 0.01;
+
+> = 0.0;
+
+
+// ============================================================
+
+// ZONE 3
+
+// ============================================================
+
+uniform bool zone3_enable = true;
+
+uniform float zone3_center_x<
+
+    string label = "Zone 3 - Center X";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 75.0;
+
+uniform float zone3_center_y<
+
+    string label = "Zone 3 - Center Y";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 10.0;
+
+uniform float zone3_radius<
+
+    string label = "Zone 3 - Radius";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 10.0;
+
+uniform float zone3_magnitude<
+
+    string label = "Zone 3 - Magnitude";
+
+    string widget_type = "slider";
+
+    float minimum = -1.3333;
+
+    float maximum = 1.3333;
+
+    float step = 0.01;
+
+> = 0.0;
+
+
+// ============================================================
+
+// ZONE 4
+
+// ============================================================
+
+uniform bool zone4_enable = true;
+
+uniform float zone4_center_x<
+
+    string label = "Zone 4 - Center X";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 25.0;
+
+uniform float zone4_center_y<
+
+    string label = "Zone 4 - Center Y";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 75.0;
+
+uniform float zone4_radius<
+
+    string label = "Zone 4 - Radius";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 10.0;
+
+uniform float zone4_magnitude<
+
+    string label = "Zone 4 - Magnitude";
+
+    string widget_type = "slider";
+
+    float minimum = -1.3333;
+
+    float maximum = 1.3333;
+
+    float step = 0.01;
+
+> = 0.0;
+
+
+// ============================================================
+
+// ZONE 5
+
+// ============================================================
+
+uniform bool zone5_enable = true;
+
+uniform float zone5_center_x<
+
+    string label = "Zone 5 - Center X";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 50.0;
+
+uniform float zone5_center_y<
+
+    string label = "Zone 5 - Center Y";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 75.0;
+
+uniform float zone5_radius<
+
+    string label = "Zone 5 - Radius";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 10.0;
+
+uniform float zone5_magnitude<
+
+    string label = "Zone 5 - Magnitude";
+
+    string widget_type = "slider";
+
+    float minimum = -1.3333;
+
+    float maximum = 1.3333;
+
+    float step = 0.01;
+
+> = 0.0;
+
+
+// ============================================================
+
+// ZONE 6
+
+// ============================================================
+
+uniform bool zone6_enable = true;
+
+uniform float zone6_center_x<
+
+    string label = "Zone 6 - Center X";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 75.0;
+
+uniform float zone6_center_y<
+
+    string label = "Zone 6 - Center Y";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 10.0;
+
+uniform float zone6_radius<
+
+    string label = "Zone 6 - Radius";
+
+    string widget_type = "slider";
+
+    float minimum = 0.0;
+
+    float maximum = 100.0;
+
+    float step = 0.1;
+
+> = 10.0;
+
+uniform float zone6_magnitude<
+
+    string label = "Zone 6 - Magnitude";
+
+    string widget_type = "slider";
+
+    float minimum = -1.3333;
+
+    float maximum = 1.3333;
+
+    float step = 0.01;
+
+> = 0.0;
+
+
+// ============================================================
+
+// DISTORTION FUNCTION
+
+// ============================================================
+
+float2 distortZone(
+
+    float2 uv,
+
+    float2 center,
+
+    float radius,
+
+    float magnitude
+
+)
+
+{
+
+    if (radius <= 0.00001 || magnitude == 0.0)
+
+        return uv;
+
+    float dist = distance(uv, center);
+
+    if (dist < radius)
+
+    {
+
+        float percent = dist / radius;
+
+        if (magnitude > 0.0)
+
+        {
+
+            uv = (uv - center) *
+
+                lerp(
+
+                    1.0,
+
+                    smoothstep(
+
+                        0.0,
+
+                        radius / max(dist, 0.00001),
+
+                        percent
+
+                    ),
+
+                    magnitude * 0.75
+
+                );
+
+        }
+
+        else
+
+        {
+
+            uv = (uv - center) *
+
+                lerp(
+
+                    1.0,
+
+                    pow(
+
+                        percent,
+
+                        1.0 + magnitude * 0.75
+
+                    ) * radius / max(dist, 0.00001),
+
+                    1.0 - percent
+
+                );
+
+        }
+
+        uv += center;
+
+    }
+
+    return uv;
+
+}
+
+
+// ============================================================
+
+// MAIN
+
+// ============================================================
+
+float4 mainImage(VertData v_in) : TARGET
+
+{
+
+    float2 uv = v_in.uv;
+
+    float2 hw = uv_size;
+
+    // Aspect ratio correction
+
+    float ar = hw.y / hw.x;
+
+    // Convert UV to aspect-correct coordinates
+
+    float2 correctedUV = uv;
+
+    correctedUV.x /= ar;
+
+
+    // --------------------------------------------------------
+
+    // ZONE 1
+
+    // --------------------------------------------------------
+
+    if (zone1_enable)
+
+    {
+
+        float2 center = float2(
+
+            zone1_center_x / 100.0,
+
+            zone1_center_y / 100.0
+
+        );
+
+        center.x /= ar;
+
+        float mag = zone1_magnitude;
+
+        if (animate)
+
+            mag *= sin(radians(elapsed_time * 20.0));
+
+        correctedUV = distortZone(
+
+            correctedUV,
+
+            center,
+
+            zone1_radius / 100.0,
+
+            mag
+
+        );
+
+    }
+
+
+    // --------------------------------------------------------
+
+    // ZONE 2
+
+    // --------------------------------------------------------
+
+    if (zone2_enable)
+
+    {
+
+        float2 center = float2(
+
+            zone2_center_x / 100.0,
+
+            zone2_center_y / 100.0
+
+        );
+
+        center.x /= ar;
+
+        float mag = zone2_magnitude;
+
+        if (animate)
+
+            mag *= sin(radians(elapsed_time * 20.0));
+
+        correctedUV = distortZone(
+
+            correctedUV,
+
+            center,
+
+            zone2_radius / 100.0,
+
+            mag
+
+        );
+
+    }
+
+
+    // --------------------------------------------------------
+
+    // ZONE 3
+
+    // --------------------------------------------------------
+
+    if (zone3_enable)
+
+    {
+
+        float2 center = float2(
+
+            zone3_center_x / 100.0,
+
+            zone3_center_y / 100.0
+
+        );
+
+        center.x /= ar;
+
+        float mag = zone3_magnitude;
+
+        if (animate)
+
+            mag *= sin(radians(elapsed_time * 20.0));
+
+        correctedUV = distortZone(
+
+            correctedUV,
+
+            center,
+
+            zone3_radius / 100.0,
+
+            mag
+
+        );
+
+    }
+
+
+    // --------------------------------------------------------
+
+    // ZONE 4
+
+    // --------------------------------------------------------
+
+    if (zone4_enable)
+
+    {
+
+        float2 center = float2(
+
+            zone4_center_x / 100.0,
+
+            zone4_center_y / 100.0
+
+        );
+
+        center.x /= ar;
+
+        float mag = zone4_magnitude;
+
+        if (animate)
+
+            mag *= sin(radians(elapsed_time * 20.0));
+
+        correctedUV = distortZone(
+
+            correctedUV,
+
+            center,
+
+            zone4_radius / 100.0,
+
+            mag
+
+        );
+
+    }
+
+
+    // --------------------------------------------------------
+
+    // ZONE 5
+
+    // --------------------------------------------------------
+
+    if (zone5_enable)
+
+    {
+
+        float2 center = float2(
+
+            zone5_center_x / 100.0,
+
+            zone5_center_y / 100.0
+
+        );
+
+        center.x /= ar;
+
+        float mag = zone5_magnitude;
+
+        if (animate)
+
+            mag *= sin(radians(elapsed_time * 20.0));
+
+        correctedUV = distortZone(
+
+            correctedUV,
+
+            center,
+
+            zone5_radius / 100.0,
+
+            mag
+
+        );
+
+    }
+
+
+    // --------------------------------------------------------
+
+    // ZONE 6
+
+    // --------------------------------------------------------
+
+    if (zone6_enable)
+
+    {
+
+        float2 center = float2(
+
+            zone6_center_x / 100.0,
+
+            zone6_center_y / 100.0
+
+        );
+
+        center.x /= ar;
+
+        float mag = zone6_magnitude;
+
+        if (animate)
+
+            mag *= sin(radians(elapsed_time * 20.0));
+
+        correctedUV = distortZone(
+
+            correctedUV,
+
+            center,
+
+            zone6_radius / 100.0,
+
+            mag
+
+        );
+
+    }
+
+
+    // --------------------------------------------------------
+
+    // Convert back from aspect-correct coordinates
+
+    // --------------------------------------------------------
+
+    correctedUV.x *= ar;
+
+    return image.Sample(textureSampler, correctedUV);
+
+}
+// END ORIGINAL SHADER
+technique Draw {
+    pass {
+        vertex_shader = VSDefault(v);
+        pixel_shader = mainImage(v_in);
+    }
+}

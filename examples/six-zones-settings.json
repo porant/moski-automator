@@ -1,0 +1,35 @@
+{
+  "op": 6,
+  "d": {
+    "requestType": "SetSourceFilterSettings",
+    "requestId": "configure-points",
+    "requestData": {
+      "sourceName": "CAMERA",
+      "filterName": "Distortion",
+      "overlay": true,
+      "filterSettings": {
+        "mode": 2,
+        "animation_fps": 0,
+        "default_duration_ms": 1000,
+        "default_easing": 5,
+        "face_tracking": true,
+        "face_fps": 10,
+        "face_max": 4,
+        "face_scale": true,
+        "point1_enable": true,
+        "point1_offset_x": 0,
+        "point1_offset_y": 10,
+        "point1_radius": 12,
+        "point1_magnitude_target": 0.3,
+        "point1_magnitude_duration_ms": 300,
+        "point1_magnitude_easing": 5,
+        "point1_magnitude_auto_return": true,
+        "point1_magnitude_return_ms": 1000,
+        "point2_magnitude_target": 0.2,
+        "point2_magnitude_auto_return": true,
+        "point3_magnitude_target": 0.2,
+        "point3_magnitude_auto_return": true
+      }
+    }
+  }
+}
