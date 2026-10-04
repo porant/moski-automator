@@ -20,18 +20,9 @@ uniform int face_count = 0;
 uniform float4 face_box[8];       // cx, cy, w, h (percent of frame)
 uniform bool debug_points = false;
 uniform int marker_count = 0;
-uniform float4 marker_data[24];   // x, y (centre %), z (size %), w (point index)
-// Meme morphs: signed strength (-1..1, 0 = off) of BigHead, Squash, Swirl, Melt, Mirror, Tilt,
-// applied to morph_count detected faces. morph_count is 0 unless a morph is active. Keep in sync
-// with opa::morphCount in src/animation.hpp. Kept as individual scalars (not a float array) so the
-// uniform packing matches the working scalar uniforms (zone_count / marker_count / face_count).
-uniform float morph0 = 0.0;
-uniform float morph1 = 0.0;
-uniform float morph2 = 0.0;
-uniform float morph3 = 0.0;
-uniform float morph4 = 0.0;
-uniform float morph5 = 0.0;
-uniform int morph_count = 0;
+// x, y (centre %), z (size %), w (marker index): 0..2 = point anchors, 3..7 = raw landmarks.
+// Sized for maxFaces (8) x (3 anchors + 5 landmarks). Keep in sync with opa::maxMarkers.
+uniform float4 marker_data[64];
 
 sampler_state textureSampler {
     Filter = Linear;
@@ -90,68 +81,26 @@ float2 distortZone(
 }
 
 // ------------------------------------------------------------
-// Meme morphs: whole-face warps on the aspect-corrected UVs. `v` is a signed strength (0 = off).
-// Written without early returns or continue so the shader compiles to straight-line / simple
-// control flow (a dynamic loop with early exits inside a called function hung the GPU on some
-// drivers). Each type remaps the region UV differently.
+// Debug marker colours: 0..2 = point anchors (forehead / nose bridge / below chin),
+// 3..7 = raw YuNet landmarks (right eye, left eye, nose tip, right mouth, left mouth).
 // ------------------------------------------------------------
-float2 rotateUV(float2 p, float a)
+float3 markerColor(int idx)
 {
-    float s = sin(a);
-    float c = cos(a);
-    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
-}
-
-// Each morph is a small, self-contained UV remap about the face centre `c`. `v` is a signed
-// strength; |v| < 0.0005 is a no-op. Kept as separate functions (no int dispatch) so the compiler
-// generates simple, independent code paths.
-float2 morphBigHead(float2 uv, float2 c, float v)
-{
-    if (abs(v) < 0.0005)
-        return uv;
-    return c + (uv - c) / max(0.2, 1.0 + 0.6 * v);
-}
-
-float2 morphSquash(float2 uv, float2 c, float v)
-{
-    if (abs(v) < 0.0005)
-        return uv;
-    float k = 0.45 * v;
-    return c + (uv - c) * float2(1.0 - k, 1.0 + k);
-}
-
-float2 morphSwirl(float2 uv, float2 c, float2 bx, float v)
-{
-    if (abs(v) < 0.0005)
-        return uv;
-    float2 p = uv - c;
-    float d = clamp(length(p) / max(bx.x, 0.0001), 0.0, 1.0);
-    return c + rotateUV(p, v * 1.6 * (1.0 - d));
-}
-
-float2 morphMelt(float2 uv, float2 c, float2 bx, float v)
-{
-    if (abs(v) < 0.0005)
-        return uv;
-    float top = c.y - bx.y;
-    float rel = clamp((uv.y - top) / max(2.0 * bx.y, 0.0001), 0.0, 1.0);
-    return float2(uv.x, uv.y - v * rel * bx.y * 0.9);
-}
-
-float2 morphMirror(float2 uv, float2 c, float v)
-{
-    if (abs(v) < 0.0005)
-        return uv;
-    float2 p = uv - c;
-    float m = step(0.5, abs(v));
-    return c + float2(lerp(p.x, -p.x, m), p.y);
-}
-
-float2 morphTilt(float2 uv, float2 c, float v)
-{
-    if (abs(v) < 0.0005)
-        return uv;
-    return c + rotateUV(uv - c, v * 0.6);
+    if (idx == 0)
+        return float3(1.0, 0.25, 0.25); // forehead      - red
+    if (idx == 1)
+        return float3(0.25, 1.0, 0.25); // nose bridge   - green
+    if (idx == 2)
+        return float3(0.3, 0.6, 1.0); // below chin     - blue
+    if (idx == 3)
+        return float3(1.0, 0.85, 0.15); // right eye      - yellow
+    if (idx == 4)
+        return float3(0.15, 0.85, 1.0); // left eye       - cyan
+    if (idx == 5)
+        return float3(1.0, 0.3, 0.9); // nose tip        - magenta
+    if (idx == 6)
+        return float3(1.0, 0.55, 0.1); // right mouth     - orange
+    return float3(0.7, 0.4, 1.0);      // left mouth      - violet
 }
 
 // ------------------------------------------------------------
@@ -179,34 +128,6 @@ float4 mainImage(VertData v_in) : TARGET
         if (animate)
             mag *= sin(radians(elapsed_time * 20.0));
         correctedUV = distortZone(correctedUV, center, z.z / 100.0, mag);
-    }
-
-    // ---------- MEME MORPHS: whole-face warps on the first morph_count detected faces ----------
-    // morph_count is 0 unless a morph is enabled, so this costs nothing when morphs are off.
-    if (morph_count > 0)
-    {
-        for (int fi = 0; fi < morph_count; fi++)
-        {
-            float4 b = face_box[fi];
-            float2 c = float2(b.x / 100.0, b.y / 100.0);
-            c.x /= ar;
-            float2 bx = float2(b.z / 100.0 * 0.5, b.w / 100.0 * 0.5);
-            bx.x /= ar;
-            bx *= 1.15; // region a little larger than the box so the warp fades out softly
-            float2 q = (correctedUV - c) / max(bx, float2(0.0001, 0.0001));
-            float region = 1.0 - smoothstep(0.7, 1.0, length(q));
-            if (region > 0.0)
-            {
-                float2 warped = correctedUV;
-                warped = morphBigHead(warped, c, morph0);
-                warped = morphSquash(warped, c, morph1);
-                warped = morphSwirl(warped, c, bx, morph2);
-                warped = morphMelt(warped, c, bx, morph3);
-                warped = morphMirror(warped, c, morph4);
-                warped = morphTilt(warped, c, morph5);
-                correctedUV = lerp(correctedUV, warped, region);
-            }
-        }
     }
 
     // Sample the (morph-applied) image. correctedUV is aspect-corrected, so undo x for sampling.
@@ -252,8 +173,7 @@ float4 mainImage(VertData v_in) : TARGET
             float ring = 1.0 - smoothstep(size, size * 1.35, d);
             float dot = 1.0 - smoothstep(size * 0.35, size * 0.55, d);
             int idx = (int)m.w;
-            float3 col = idx == 0 ? float3(1.0, 0.25, 0.25)
-                      : (idx == 1 ? float3(0.25, 1.0, 0.25) : float3(0.3, 0.6, 1.0));
+            float3 col = markerColor(idx);
             color.rgb = lerp(color.rgb, col, clamp(ring * 0.45 + dot, 0.0, 1.0));
         }
     }

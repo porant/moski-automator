@@ -13,6 +13,8 @@ constexpr const char *filterId = "opa_6zone_distortion";
 // zone_data array is sized for maxFaces faces.
 constexpr int maxFaces = 8;
 constexpr int maxZones = maxFaces * pointCount;
+// Debug markers: the 3 face-point anchors plus the 5 raw YuNet landmarks, per detected face.
+constexpr int maxMarkers = maxFaces * (pointCount + landmarkCount);
 enum class Mode { Static = 0, Shader = 1, Plugin = 2 };
 struct Snapshot {
     AnimationController controller;

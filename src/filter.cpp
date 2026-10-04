@@ -406,8 +406,6 @@ struct ShaderController {
     gs_eparam_t *markerCount = nullptr, *markerData = nullptr;
     gs_eparam_t *faceCount = nullptr, *faceBox = nullptr;
     gs_eparam_t *blurFaces = nullptr, *blurPx = nullptr, *debugPoints = nullptr;
-    std::array<gs_eparam_t *, morphCount> morph{}; // meme morph strengths (scalar uniforms morph0..5)
-    gs_eparam_t *morphFace = nullptr;              // morph_count (faces to warp; 0 = none)
     gs_eparam_t *animate = nullptr, *size = nullptr, *time = nullptr;
     std::shared_ptr<Engine> engine = std::make_shared<Engine>();
     bool inCapture = false; // guards against recursive rendering while grabbing a detection frame
@@ -506,16 +504,9 @@ static void *create(obs_data_t *s, obs_source_t *source) {
     f->blurFaces = gs_effect_get_param_by_name(f->effect, "blur_faces");
     f->blurPx = gs_effect_get_param_by_name(f->effect, "blur_px");
     f->debugPoints = gs_effect_get_param_by_name(f->effect, "debug_points");
-    static const char *morphNames[morphCount] = {"morph0", "morph1", "morph2", "morph3", "morph4", "morph5"};
-    bool morphOk = true;
-    for (int i = 0; i < morphCount; ++i) {
-        f->morph[i] = gs_effect_get_param_by_name(f->effect, morphNames[i]);
-        morphOk = morphOk && f->morph[i] != nullptr;
-    }
-    f->morphFace = gs_effect_get_param_by_name(f->effect, "morph_count");
     if (!f->zoneCount || !f->zoneData || !f->animate || !f->size || !f->time || !f->markerCount ||
         !f->markerData || !f->faceCount || !f->faceBox || !f->blurFaces || !f->blurPx ||
-        !f->debugPoints || !morphOk || !f->morphFace) {
+        !f->debugPoints) {
         blog(LOG_ERROR, "[OPA] Required shader uniforms missing");
         destroy(f);
         return nullptr;
@@ -695,7 +686,7 @@ static void render(void *v, gs_effect_t *) {
     }
     // From the smoothed tracks build: distortion zones, debug markers and blur face boxes.
     std::array<float, maxZones * 4> zones{};
-    std::array<float, maxZones * 4> markers{};
+    std::array<float, maxMarkers * 4> markers{}; // 3 anchors + 5 landmarks per face
     std::array<float, maxFaces * 4> boxes{};
     int zoneCount = 0, markerCount = 0, faceCount = 0;
     {
@@ -708,9 +699,9 @@ static void render(void *v, gs_effect_t *) {
             // Scale to the face: radius and offsets are then relative to the face height instead of
             // the frame, so a distant face gets proportionally smaller points.
             const double scale = faceScale ? std::clamp(tr.h / 100.0, 0.05, 3.0) : 1.0;
-            // Face boxes feed the blur option and the whole-face meme morphs. Filled only when one
-            // of those is on, so the plain point-distortion path behaves exactly as before.
-            if ((effectBlur || morphActive) && faceCount < maxFaces) {
+            // Face boxes feed the blur option. Filled only when it is on, so the plain
+            // point-distortion path behaves exactly as before.
+            if (effectBlur && faceCount < maxFaces) {
                 float *b = boxes.data() + faceCount * 4;
                 b[0] = (float)tr.cx;
                 b[1] = (float)tr.cy;
@@ -723,7 +714,7 @@ static void render(void *v, gs_effect_t *) {
                     continue; // point disabled
                 const double ax = tr.anchors[p].x + pOffX[p] * scale;
                 const double ay = tr.anchors[p].y + pOffY[p] * scale;
-                if (effectDebug && markerCount < maxZones) {
+                if (effectDebug && markerCount < maxMarkers) {
                     float *m = markers.data() + markerCount * 4;
                     m[0] = (float)ax;
                     m[1] = (float)ay;
@@ -742,6 +733,18 @@ static void render(void *v, gs_effect_t *) {
                     ++zoneCount;
                 }
             }
+            // Raw landmarks (eyes / nose tip / mouth corners) drawn with marker indices 3..7 so the
+            // debug overlay shows the newer points too, not just the three derived anchors.
+            if (effectDebug && tr.hasLandmarks) {
+                for (int l = 0; l < landmarkCount && markerCount < maxMarkers; ++l) {
+                    float *m = markers.data() + markerCount * 4;
+                    m[0] = (float)tr.landmarks[l].x;
+                    m[1] = (float)tr.landmarks[l].y;
+                    m[2] = (float)(1.1 * std::clamp(scale, 0.6, 2.0)); // a bit smaller than anchors
+                    m[3] = (float)(pointCount + l);                    // 3..7 -> distinct colour
+                    ++markerCount;
+                }
+            }
         }
     }
     if (zoneCount == 0 && markerCount == 0 && faceCount == 0) {
@@ -754,17 +757,13 @@ static void render(void *v, gs_effect_t *) {
     // libobs gs_technique_end clears effect parameter values; set them on EVERY draw.
     gs_effect_set_val(f.zoneData, zones.data(), sizeof(float) * 4 * maxZones);
     gs_effect_set_int(f.zoneCount, zoneCount);
-    gs_effect_set_val(f.markerData, markers.data(), sizeof(float) * 4 * maxZones);
+    gs_effect_set_val(f.markerData, markers.data(), sizeof(float) * 4 * maxMarkers);
     gs_effect_set_int(f.markerCount, markerCount);
     gs_effect_set_val(f.faceBox, boxes.data(), sizeof(float) * 4 * maxFaces);
     gs_effect_set_int(f.faceCount, faceCount);
     gs_effect_set_bool(f.blurFaces, effectBlur);
     gs_effect_set_float(f.blurPx, (float)faceBlurPx);
     gs_effect_set_bool(f.debugPoints, effectDebug);
-    for (int i = 0; i < morphCount; ++i)
-        gs_effect_set_float(f.morph[i], (float)morphVal[i]);
-    // The shader only warps faces when a morph is active, so morphs cost nothing when off.
-    gs_effect_set_int(f.morphFace, morphActive ? faceCount : 0);
     gs_effect_set_bool(f.animate, sine);
     vec2 size;
     vec2_set(&size, (float)w, (float)h);
@@ -772,7 +771,7 @@ static void render(void *v, gs_effect_t *) {
     gs_effect_set_float(f.time, sine ? (float)elapsed : 0.0f);
     {
         std::lock_guard lock(f.engine->mutex);
-        f.engine->uniformCalls += 19;
+        f.engine->uniformCalls += 12;
     }
     obs_source_process_filter_end(f.source, f.effect, w, h);
 }
