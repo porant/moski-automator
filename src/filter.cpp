@@ -410,13 +410,6 @@ struct ShaderController {
     gs_eparam_t *animate = nullptr, *size = nullptr, *time = nullptr;
     std::shared_ptr<Engine> engine = std::make_shared<Engine>();
     bool inCapture = false; // guards against recursive rendering while grabbing a detection frame
-    // Detection-capture resources: created once and reused (recreated only on a size change) to
-    // avoid per-tick GPU resource churn. The staged frame is read back one tick later so the
-    // readback does not stall the GPU pipeline in the middle of a render.
-    gs_texrender_t *capTr = nullptr;
-    gs_stagesurf_t *capStage = nullptr;
-    int capW = 0, capH = 0;
-    bool capPending = false;
 };
 static const char *name(void *) {
     return "Face Points Distortion + Parameter Animator";
@@ -482,10 +475,6 @@ static void destroy(void *v) {
     obs_enter_graphics();
     if (f->effect)
         gs_effect_destroy(f->effect);
-    if (f->capTr)
-        gs_texrender_destroy(f->capTr);
-    if (f->capStage)
-        gs_stagesurface_destroy(f->capStage);
     obs_leave_graphics();
     delete f;
 }
@@ -542,14 +531,11 @@ static void *create(obs_data_t *s, obs_source_t *source) {
     return f;
 }
 // Grabs a small, downscaled RGBA frame of the filter's own input and hands it to the detector.
-// This is the *only* extra GPU cost of face tracking and it only runs at the configured detection
-// FPS (not per rendered frame). Compared with the original implementation it is made safer in
-// three ways, because the previous one could hang the GPU on some sources:
-//   * the input is no longer re-rendered while toggling the filter's enabled state (that reentrant
-//     obs_source_set_enabled() call is gone; the inCapture flag already prevents recursion);
-//   * the texrender and staging surface are created once and reused instead of every tick;
-//   * the staged frame is read back on the NEXT tick, so the blocking gs_stagesurface_map() happens
-//     after the GPU has finished the copy instead of stalling the pipeline in the middle of a render.
+// This is the *only* extra GPU cost of face tracking and it only runs while (a) tracking is on and
+// (b) a point magnitude or a meme morph is non-zero, at the configured detection FPS - not per
+// rendered frame. We render the target ourselves with this filter disabled (guarded by inCapture)
+// so the filter never renders itself, then read the texrender back through a stage surface at the
+// detection resolution.
 static void captureForDetection(ShaderController &f, int detectHeight) {
     obs_source_t *target = obs_filter_get_target(f.source);
     if (!target)
@@ -562,46 +548,37 @@ static void captureForDetection(ShaderController &f, int detectHeight) {
     dw = std::clamp(dw, 2, 1280);
     if (dw & 1)
         ++dw; // even width keeps the downscale symmetric
-
-    if (!f.capTr)
-        f.capTr = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
-    if (!f.capStage || f.capW != dw || f.capH != dh) {
-        if (f.capStage)
-            gs_stagesurface_destroy(f.capStage);
-        f.capStage = gs_stagesurface_create(dw, dh, GS_RGBA);
-        f.capW = dw;
-        f.capH = dh;
-        f.capPending = false;
-    }
-    if (!f.capTr || !f.capStage)
-        return;
-
-    // 1) Read back the frame staged on the previous tick (its GPU copy has long finished).
-    if (f.capPending) {
-        uint8_t *data = nullptr;
-        uint32_t linesize = 0;
-        if (gs_stagesurface_map(f.capStage, &data, &linesize)) {
-            f.engine->tracker->submit(data, f.capW, f.capH, (int)linesize);
-            gs_stagesurface_unmap(f.capStage);
-        }
-        f.capPending = false;
-    }
-
-    // 2) Render the input small and queue a copy to be read back next tick.
+    const bool wasEnabled = obs_source_enabled(f.source);
+    if (wasEnabled)
+        obs_source_set_enabled(f.source, false);
     f.inCapture = true;
-    if (gs_texrender_begin(f.capTr, dw, dh)) {
+    gs_texrender_t *tr = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+    if (tr && gs_texrender_begin(tr, dw, dh)) {
         vec4 clear;
         vec4_set(&clear, 0.0f, 0.0f, 0.0f, 1.0f);
         gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
         gs_ortho(0.0f, (float)w, 0.0f, (float)h, -100.0f, 100.0f);
         obs_source_video_render(target);
-        gs_texrender_end(f.capTr);
-        if (gs_texture_t *tex = gs_texrender_get_texture(f.capTr)) {
-            gs_stage_texture(f.capStage, tex);
-            f.capPending = true;
+        gs_texrender_end(tr);
+        if (gs_texture_t *tex = gs_texrender_get_texture(tr)) {
+            gs_stagesurf_t *stage = gs_stagesurface_create(dw, dh, GS_RGBA);
+            if (stage) {
+                gs_stage_texture(stage, tex);
+                uint8_t *data = nullptr;
+                uint32_t linesize = 0;
+                if (gs_stagesurface_map(stage, &data, &linesize)) {
+                    f.engine->tracker->submit(data, dw, dh, (int)linesize);
+                    gs_stagesurface_unmap(stage);
+                }
+                gs_stagesurface_destroy(stage);
+            }
         }
     }
+    if (tr)
+        gs_texrender_destroy(tr);
     f.inCapture = false;
+    if (wasEnabled)
+        obs_source_set_enabled(f.source, true);
 }
 static void render(void *v, gs_effect_t *) {
     auto &f = *static_cast<ShaderController *>(v);
