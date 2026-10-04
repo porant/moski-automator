@@ -151,7 +151,8 @@ Get-FileHash .\build\obs-parameter-animator.dll, .\stage\obs-plugins\64bit\obs-p
   В списке должны быть `modeBox, blurBox, blurPxSpin, debugBox, scaleBox, faceBox, smoothSpin,
   pointBox, enabledBox, durSpin, easing, autoReturn, holdSpin, returnSpin, returnEasing, testParam,
   testValue, table, value, duration, tableEasing, returnToBase, metrics, logs, logFilter, pause,
-  hint` (плюс `sl`/`sp` из `addRow` создают `cxSld/cySld/radSld/magSld` и `*Spin`).
+  hint` (плюс `sl`/`sp` из `addRow` создают `cxSld/cySld/radSld/magSld` и `*Spin`, а
+  `magBox` — `magMinSpin/magMaxSpin`).
 - Как быстро найти строку краха по crash-логу (через PDB, без отладчика): в crash-логе есть таблица
   модулей с базовыми адресами; `функция+N` из нашего DLL → RVA; сигнатура `pull+0x7e3` и т.п.
   сопоставляется с исходной строкой утилитой `dbghelp` (`SymGetLineFromAddr64`).

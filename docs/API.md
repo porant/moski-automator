@@ -55,9 +55,16 @@ Parameter ID = `(point - 1) * 5 + offset`:
 | 1 | offset_x | −100..100 (сдвиг якоря по X, %) |
 | 2 | offset_y | −100..100 (сдвиг якоря по Y, %) |
 | 3 | radius | 0..100 (% высоты кадра) |
-| 4 | magnitude | −1.3333..1.3333 |
+| 4 | magnitude | −1.3333..1.3333 по умолчанию; диапазон задаётся `pointN_magnitude_min/_max` |
 
 Например point1_magnitude = 4, point2_radius = 8, point3_magnitude = 14. Если переданы parameter и parameterId одновременно, parameter имеет приоритет.
+
+Диапазон `magnitude` можно сузить или расширить для каждой точки отдельно: ключи
+`pointN_magnitude_min` и `pointN_magnitude_max` (например `point1_magnitude_min = -0.5`,
+`point1_magnitude_max = 2`). Они задают границы, в которых живёт значение параметра: базовая
+величина, `_target`, `_return_value`, `Add`/`Set` и возврат всегда ограничиваются этими границами;
+строка с `max <= min` игнорируется. Те же поля есть в свойствах фильтра и в dock-панели
+(вкладка Visual → «Magnitude min / max»).
 
 ## Requests
 

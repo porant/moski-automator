@@ -127,6 +127,23 @@ struct AnimatedParameter {
         configuredTarget = base;
         returnValue = base;
     }
+    // Re-target the allowed range at runtime. Magnitude is the only parameter whose per-point
+    // min/max is user configurable, so every stored value is re-clamped to keep the parameter
+    // (rest value, pending target, return endpoint and a running trajectory) inside the new range.
+    // An inverted or non-finite range is rejected, leaving the current bounds untouched.
+    void setBounds(double lo, double hi) {
+        if (!std::isfinite(lo) || !std::isfinite(hi) || hi <= lo)
+            return;
+        minimum = lo;
+        maximum = hi;
+        baseValue = clamp(baseValue);
+        configuredTarget = clamp(configuredTarget);
+        returnValue = clamp(returnValue);
+        scheduledReturnValue = clamp(scheduledReturnValue);
+        state.startValue = clamp(state.startValue);
+        state.currentValue = clamp(state.currentValue);
+        state.targetValue = clamp(state.targetValue);
+    }
     // Absolute stage timestamps make long frame gaps traverse attack/hold/return correctly.
     void sample(double time) {
         for (int transitions = 0; state.active && transitions < 3; ++transitions) {
@@ -209,6 +226,13 @@ struct AnimatedParameter {
 constexpr int pointCount = 3;
 constexpr int pointParamCount = 5;
 constexpr int paramCount = pointCount * pointParamCount;
+// Index of "magnitude" within one point's five parameters. Its min/max is the one range the user
+// can narrow or widen per point (settings keys pointN_magnitude_min / pointN_magnitude_max).
+constexpr int magnitudeParam = 4;
+constexpr double defaultMagnitudeMin = -1.3333, defaultMagnitudeMax = 1.3333;
+inline bool isMagnitude(int index) {
+    return index % pointParamCount == magnitudeParam;
+}
 struct ZoneController {
     std::array<AnimatedParameter, pointParamCount> parameters;
 };
@@ -221,7 +245,7 @@ struct AnimationController {
             p[1].initialize(0, -100, 100);        // offset_x
             p[2].initialize(0, -100, 100);        // offset_y
             p[3].initialize(10, 0, 100);          // radius
-            p[4].initialize(0, -1.3333, 1.3333);  // magnitude
+            p[4].initialize(0, defaultMagnitudeMin, defaultMagnitudeMax); // magnitude
             p[4].autoReturn = p[4].configuredAutoReturn = true;
         }
     }

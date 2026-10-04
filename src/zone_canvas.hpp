@@ -24,6 +24,8 @@ namespace opa {
 struct ZoneView {
     bool enabled = true;
     double cx = 25, cy = 25, radius = 10, magnitude = 0;
+    // Per-point magnitude clamp (mirrors the plugin's configurable magnitude min/max settings).
+    double magMin = -1.3333, magMax = 1.3333;
 };
 
 // A detected face for the overlay, in the same percent units as a zone.
@@ -40,6 +42,8 @@ struct FaceView {
 class ZoneCanvas : public QWidget {
   public:
     static constexpr int kZones = 6;
+    // Default magnitude range, used only to normalise the preview's visual "strength" and as the
+    // ZoneView default; the actual per-zone clamp lives in ZoneView::magMin / magMax.
     static constexpr double kMagMin = -1.3333, kMagMax = 1.3333;
 
     std::function<void(int)> onSelected;
@@ -130,7 +134,7 @@ class ZoneCanvas : public QWidget {
     const std::array<ZoneView, kZones> &values() const { return values_; }
 
     void setMagnitude(int z, double v) {
-        values_[z].magnitude = std::clamp(v, kMagMin, kMagMax);
+        values_[z].magnitude = std::clamp(v, values_[z].magMin, values_[z].magMax);
         update();
         if (onChanged)
             onChanged(z);

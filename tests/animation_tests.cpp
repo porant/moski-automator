@@ -132,6 +132,30 @@ int main() {
     require(rest.magnitudesAtRest(), "launching to zero keeps magnitude at rest");
     rest.at(pointCount * pointParamCount - 1).launch(.25, .3, 0, 0, false);
     require(!rest.magnitudesAtRest(), "any point leaving zero breaks rest");
+    // Magnitude is the one parameter whose range is configurable per point; every stored value
+    // (rest, target, return endpoint and a running value) follows the configured min/max.
+    require(isMagnitude(magnitudeParam) && isMagnitude(pointParamCount + magnitudeParam) &&
+                !isMagnitude(magnitudeParam + 1),
+            "isMagnitude identifies the magnitude parameter");
+    AnimationController ranges;
+    auto &mag = ranges.at(magnitudeParam);
+    require(near(mag.minimum, defaultMagnitudeMin) && near(mag.maximum, defaultMagnitudeMax),
+            "magnitude starts at the default range");
+    mag.setBounds(-0.5, 2.0);
+    require(near(mag.minimum, -0.5) && near(mag.maximum, 2.0), "setBounds updates the range");
+    mag.launch(5.0, 1, 0, 0, false);
+    require(near(mag.state.targetValue, 2.0), "target clamps to the configured maximum");
+    mag.sample(1);
+    require(near(mag.state.currentValue, 2.0), "the value reaches the clamped maximum");
+    mag.add(-10, 1, 0, 5, false);
+    mag.sample(6);
+    require(near(mag.state.currentValue, -0.5), "the value clamps to the configured minimum");
+    mag.setBounds(0.0, 1.0);
+    require(near(mag.state.currentValue, 0.0) && near(mag.baseValue, 0.0),
+            "narrowing the range re-clamps the stored values");
+    mag.setBounds(2.0, 1.0);
+    require(near(mag.minimum, 0.0) && near(mag.maximum, 1.0), "an inverted range is rejected");
+    require(near(mag.clamp(1e9), 1.0) && near(mag.clamp(-1e9), 0.0), "clamp honours the new bounds");
     bool rejected = false;
     try {
         p.launch(NAN, 1, 0, 50, false);

@@ -56,6 +56,13 @@ void Engine::configure(obs_data_t *s) {
     for (int i = 0; i < paramCount; ++i) {
         const auto key = parameterName(i);
         auto &p = controller.at(i);
+        // Magnitude is the one parameter whose animation range is configurable per point. Apply it
+        // before clamping the rest value / target / return endpoint so they all obey the new bounds.
+        if (isMagnitude(i)) {
+            const double lo = obs_data_get_double(s, (key + "_min").c_str());
+            const double hi = obs_data_get_double(s, (key + "_max").c_str());
+            p.setBounds(lo, hi);
+        }
         double base = p.boolean ? obs_data_get_bool(s, key.c_str()) : obs_data_get_double(s, key.c_str());
         if (!std::isfinite(base))
             base = p.baseValue;
@@ -374,6 +381,11 @@ static void defaults(obs_data_t *s) {
         // A short hold by default: the pulse stays visible briefly after the last Add, then returns.
         obs_data_set_default_double(s, (k + "_hold_ms").c_str(), 200);
         obs_data_set_default_int(s, (k + "_return_easing").c_str(), 5);
+        // magnitude is the only parameter with a user-configurable per-point range.
+        if (isMagnitude(i)) {
+            obs_data_set_default_double(s, (k + "_min").c_str(), p.minimum);
+            obs_data_set_default_double(s, (k + "_max").c_str(), p.maximum);
+        }
     }
     // Face tracking is opt-in. Each detected face gets one zone per enabled point.
     obs_data_set_default_bool(s, "face_tracking", false);
@@ -766,6 +778,30 @@ static obs_properties_t *properties(void *v) {
         obs_properties_add_group(props, "face_tracking_group", "Face tracking", OBS_GROUP_NORMAL, ft);
     }
     AnimationController c;
+    // Magnitude min/max is per point; size the magnitude value/target/return controls to it so the
+    // dialog matches the dock. Falls back to the shader default when the source is unavailable.
+    std::array<double, pointCount> magLo{}, magHi{};
+    for (int z = 0; z < pointCount; ++z) {
+        const auto &mp = c.at(z * pointParamCount + magnitudeParam);
+        magLo[z] = mp.minimum;
+        magHi[z] = mp.maximum;
+    }
+    if (v) {
+        auto *f = static_cast<ShaderController *>(v);
+        if (f->source) {
+            obs_data_t *s = obs_source_get_settings(f->source);
+            for (int z = 0; z < pointCount; ++z) {
+                const auto magKey = parameterName(z * pointParamCount + magnitudeParam);
+                const double lo = obs_data_get_double(s, (magKey + "_min").c_str());
+                const double hi = obs_data_get_double(s, (magKey + "_max").c_str());
+                if (std::isfinite(lo) && std::isfinite(hi) && hi > lo) {
+                    magLo[z] = lo;
+                    magHi[z] = hi;
+                }
+            }
+            obs_data_release(s);
+        }
+    }
     constexpr const char *labels[] = {"Enable (threshold 0.5)", "Offset X (%)", "Offset Y (%)",
                                       "Radius (%)", "Magnitude"};
     for (int z = 0; z < pointCount; ++z) {
@@ -774,21 +810,27 @@ static obs_properties_t *properties(void *v) {
             const int index = z * pointParamCount + k;
             const auto key = parameterName(index);
             auto &p = c.at(index);
+            const bool isMag = k == magnitudeParam;
+            const double lo = isMag ? magLo[z] : p.minimum;
+            const double hi = isMag ? magHi[z] : p.maximum;
             auto *row = obs_properties_create();
             if (k == 0)
                 obs_properties_add_bool(row, key.c_str(), "Enabled");
             else
-                obs_properties_add_float_slider(row, key.c_str(), "Value", p.minimum, p.maximum,
-                                                k == 4 ? .01 : .1);
-            obs_properties_add_float(row, (key + "_target").c_str(), "Target of Start", p.minimum,
-                                     p.maximum, k == 4 ? .01 : .1);
+                obs_properties_add_float_slider(row, key.c_str(), "Value", lo, hi, isMag ? .01 : .1);
+            obs_properties_add_float(row, (key + "_target").c_str(), "Target of Start", lo, hi,
+                                     isMag ? .01 : .1);
             obs_properties_add_float(row, (key + "_duration_ms").c_str(),
                                      "Move duration ms (-1 = default)", -1, 3600000, 1);
             easingProperty(row, key + "_easing", "Move easing", true);
             obs_properties_add_bool(row, (key + "_auto_return").c_str(),
                                     "Auto return after reaching the target");
-            obs_properties_add_float(row, (key + "_return_value").c_str(), "Return endpoint", p.minimum,
-                                     p.maximum, .01);
+            obs_properties_add_float(row, (key + "_return_value").c_str(), "Return endpoint", lo, hi,
+                                     .01);
+            if (isMag) {
+                obs_properties_add_float(row, (key + "_min").c_str(), "Magnitude min", -100, 100, .01);
+                obs_properties_add_float(row, (key + "_max").c_str(), "Magnitude max", -100, 100, .01);
+            }
             obs_properties_add_float(row, (key + "_hold_ms").c_str(),
                                      "Return delay after the last Add (ms)", 0, 3600000, 10);
             obs_properties_add_float(row, (key + "_return_ms").c_str(), "Return duration (ms)", 0, 3600000,

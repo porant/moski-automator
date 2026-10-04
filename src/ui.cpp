@@ -40,6 +40,7 @@ class AnimatorPanel : public QWidget {
     QLabel *faceStatus = nullptr, *hint = nullptr;
     QSlider *cxSld = nullptr, *cySld = nullptr, *radSld = nullptr, *magSld = nullptr;
     QDoubleSpinBox *cxSpin = nullptr, *cySpin = nullptr, *radSpin = nullptr, *magSpin = nullptr;
+    QDoubleSpinBox *magMinSpin = nullptr, *magMaxSpin = nullptr;
     QComboBox *testParam = nullptr;
     QDoubleSpinBox *testValue = nullptr, *durSpin = nullptr;
     QComboBox *easing = nullptr;
@@ -85,6 +86,14 @@ class AnimatorPanel : public QWidget {
             v.cy = obs_data_get_double(s, (k + "offset_y").c_str());
             v.radius = obs_data_get_double(s, (k + "radius").c_str());
             v.magnitude = obs_data_get_double(s, (k + "magnitude").c_str());
+            // Per-point magnitude clamp; fall back to the shader default when unset or inverted.
+            v.magMin = obs_data_get_double(s, (k + "magnitude_min").c_str());
+            v.magMax = obs_data_get_double(s, (k + "magnitude_max").c_str());
+            if (!(v.magMax > v.magMin)) {
+                v.magMin = defaultMagnitudeMin;
+                v.magMax = defaultMagnitudeMax;
+            }
+            v.magnitude = std::clamp(v.magnitude, v.magMin, v.magMax);
         }
         updating = true;
         modeBox->setCurrentIndex(std::clamp((int)obs_data_get_int(s, "mode"), 0, 2));
@@ -125,6 +134,8 @@ class AnimatorPanel : public QWidget {
             obs_data_set_double(s, (k + "offset_y").c_str(), v.cy);
             obs_data_set_double(s, (k + "radius").c_str(), v.radius);
             obs_data_set_double(s, (k + "magnitude").c_str(), v.magnitude);
+            obs_data_set_double(s, (k + "magnitude_min").c_str(), v.magMin);
+            obs_data_set_double(s, (k + "magnitude_max").c_str(), v.magMax);
             const double flat[pointParamCount] = {v.enabled ? 1.0 : 0.0, v.cx, v.cy, v.radius,
                                                   v.magnitude};
             for (int i = 0; i < pointParamCount; ++i) {
@@ -360,11 +371,23 @@ class AnimatorPanel : public QWidget {
         updating = guard;
     }
 
+    // The magnitude slider / spin span the selected point's configurable min..max. The caller must
+    // hold `updating` true so changing the ranges (and the paired values) does not re-enter setters.
+    void applyMagnitudeRange(const ZoneView &v) {
+        const int lo = (int)std::lround(v.magMin * 1000.0);
+        const int hi = (int)std::lround(v.magMax * 1000.0);
+        magSld->setRange(std::min(lo, hi), std::max(lo, hi));
+        magSpin->setRange(v.magMin, v.magMax);
+        magMinSpin->setValue(v.magMin);
+        magMaxSpin->setValue(v.magMax);
+    }
+
     void syncControls() {
         const bool guard = updating;
         updating = true;
         const int z = pointBox->currentIndex();
         const auto &v = points[z];
+        applyMagnitudeRange(v);
         setPair(0, v.cx);
         setPair(1, v.cy);
         setPair(2, v.radius);
@@ -373,8 +396,9 @@ class AnimatorPanel : public QWidget {
         const QString hintText = QStringLiteral(
             "Positions are detected on every face (eyes / nose / mouth). Offset nudges the point "
             "(percent of the frame), radius is a percent of the frame height, magnitude is the "
-            "distortion strength. The slider and the box always show the same value; Add / Set / "
-            "Start animate this point on all detected faces.");
+            "distortion strength. Magnitude min / max clamp how far this point's magnitude may "
+            "travel. The slider and the box always show the same value; Add / Set / Start animate "
+            "this point on all detected faces.");
         if (hint->text() != hintText)
             hint->setText(hintText);
         updating = guard;
@@ -517,8 +541,21 @@ class AnimatorPanel : public QWidget {
         addRow(2, "Radius (%)", "Radius of the distortion zone, as a percent of the frame height.",
                radSld, radSpin, 0, 100, 10, 1);
         addRow(3, "Magnitude", "Distortion strength: above 0 bulges outwards, below 0 pinches "
-                               "inwards (range -1.3333 to 1.3333).",
+                               "inwards. Default range -1.3333 to 1.3333; adjust min / max below.",
                magSld, magSpin, -1.3333, 1.3333, 1000, 3);
+        auto magBox = [&](QDoubleSpinBox *&sp, const QString &tip) {
+            sp = new QDoubleSpinBox;
+            sp->setRange(-100, 100);
+            sp->setDecimals(3);
+            sp->setSingleStep(0.01);
+            sp->setFixedWidth(92);
+            sp->setToolTip(tip);
+        };
+        grid->addWidget(new QLabel("Magnitude min / max"), 4, 0);
+        magBox(magMinSpin, "Lowest magnitude this point may reach (values are clamped to it).");
+        grid->addWidget(magMinSpin, 4, 1);
+        magBox(magMaxSpin, "Highest magnitude this point may reach (values are clamped to it).");
+        grid->addWidget(magMaxSpin, 4, 2);
         pg->addLayout(grid);
         vl->addWidget(pointGroup);
 
@@ -800,6 +837,30 @@ class AnimatorPanel : public QWidget {
         connect(magSld, &QSlider::valueChanged, this, [this, setter](int v) { if (!updating) setter(3, v / 1000.0); });
         connect(magSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, setter](double v) { if (!updating) setter(3, v); });
+        // Magnitude min / max define the per-point clamp. Keep max > min inside the spin range,
+        // re-clamp the stored magnitude, then refresh the slider / spin ranges to match.
+        connect(magMinSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double v) {
+            if (updating)
+                return;
+            auto &a = points[pointBox->currentIndex()];
+            a.magMin = std::min(v, 99.999);
+            if (!(a.magMax > a.magMin))
+                a.magMax = a.magMin + 1e-3;
+            a.magnitude = std::clamp(a.magnitude, a.magMin, a.magMax);
+            syncControls();
+            pushLater();
+        });
+        connect(magMaxSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double v) {
+            if (updating)
+                return;
+            auto &a = points[pointBox->currentIndex()];
+            a.magMax = std::max(v, -99.999);
+            if (!(a.magMax > a.magMin))
+                a.magMin = a.magMax - 1e-3;
+            a.magnitude = std::clamp(a.magnitude, a.magMin, a.magMax);
+            syncControls();
+            pushLater();
+        });
         connect(applyTiming, &QPushButton::clicked, this, [this] { writeTiming(false); });
         connect(applyTimingAll, &QPushButton::clicked, this, [this] { writeTiming(true); });
         connect(addBtn, &QPushButton::clicked, this, [this] { test("Add"); });

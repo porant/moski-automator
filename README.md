@@ -162,7 +162,9 @@ magnitude берутся из параметров точки. Координа�
 Параметры: `point1_*` (глаза), `point2_*` (нос), `point3_*` (рот) —
 `enable`, `offset_x`, `offset_y`, `radius`, `magnitude` плюс обычные ключи анимации
 (`_target`, `_duration_ms`, `_easing`, `_auto_return`, `_return_value`, `_hold_ms`, `_return_ms`,
-`_return_easing`). Глобальные настройки лиц: `face_tracking`, `face_fps`, `face_max`, `face_score`,
+`_return_easing`). Диапазон `magnitude` настраивается для каждой точки через
+`pointN_magnitude_min` / `pointN_magnitude_max` (по умолчанию −1.3333..1.3333): движение, накопление
+и возврат всегда ограничены этими границами. Глобальные настройки лиц: `face_tracking`, `face_fps`, `face_max`, `face_score`,
 `face_height`, `face_smooth_ms` (сглаживание).
 WebSocket: `requestType: "FaceTrack"` для вкл/выкл и тюнинга; в ответе `Get` есть
 `faces` (с `anchors`) и статус трекинга.
