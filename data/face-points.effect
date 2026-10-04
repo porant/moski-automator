@@ -188,21 +188,21 @@ float4 mainImage(VertData v_in) : TARGET
             float3 col = markerColor(idx);
             color.rgb = lerp(color.rgb, col, clamp(ring * 0.45 + dot, 0.0, 1.0));
         }
-        // Head-roll indicator: a small "+" through each face centre, rotated by the head roll,
-        // so the in-plane orientation of the face is visible (and shown to follow the head).
+        // Head-roll indicator: a bright "roll tape" through each face centre, aligned with the eye
+        // axis, so the in-plane orientation of the face is obvious at a glance.
         for (int f = 0; f < face_count; f++)
         {
             float4 b = face_box[f];                       // b = (cx, cy, w, h), percent of frame
             float2 c = float2(b.x / 100.0, b.y / 100.0);
             c.x /= ar;
-            float R = max(b.z, 1.0) / 100.0 * 0.35;       // b.z = face width
+            float R = max(b.z, 1.0) / 100.0 * 0.55;       // b.z = face width -> half-length of tape
             float rol = face_roll[f].x;
             float2 ax = float2(cos(rol), sin(rol)) * R;
-            float2 ay = float2(-sin(rol), cos(rol)) * R;
-            float w = max(b.w, 1.0) / 100.0 * 0.02;        // b.w = face height
+            float2 ay = float2(-sin(rol), cos(rol)) * (R * 0.3); // short perpendicular tick
+            float w = max(b.w, 1.0) / 100.0 * 0.035;       // b.w = face height -> tape thickness
             float m = max(segMask(correctedUV, c - ax, c + ax, w),
-                          segMask(correctedUV, c - ay, c + ay, w));
-            color.rgb = lerp(color.rgb, float3(1.0, 1.0, 0.15), m * 0.8);
+                          segMask(correctedUV, c - ay, c + ay, w) * 0.6);
+            color.rgb = lerp(color.rgb, float3(1.0, 0.95, 0.1), clamp(m, 0.0, 1.0));
         }
     }
 

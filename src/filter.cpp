@@ -684,13 +684,15 @@ static void render(void *v, gs_effect_t *) {
                 r = e.tracker->result();
             // Raw (unsmoothed) landmark of the first detection plus the smoothed track landmark,
             // so the log shows whether the detector updates them and whether the track follows.
-            double rx = 0, ry = 0, nx = 0, ny = 0, tx = 0, ty = 0;
+            double rx = 0, ry = 0, lx = 0, ly = 0, nx = 0, ny = 0, tx = 0, ty = 0;
             double rroll = 0, troll = 0; // radians
             bool lv = false, tvalid = false;
             if (!r.faces.empty()) {
                 lv = r.faces[0].landmarkValid;
                 rx = r.faces[0].landmark[0].x;
                 ry = r.faces[0].landmark[0].y;
+                lx = r.faces[0].landmark[1].x;
+                ly = r.faces[0].landmark[1].y;
                 nx = r.faces[0].landmark[2].x;
                 ny = r.faces[0].landmark[2].y;
                 rroll = r.faces[0].roll;
@@ -704,11 +706,11 @@ static void render(void *v, gs_effect_t *) {
             }
             blog(LOG_INFO,
                  "[OPA] face: tracking=%d available=%d faces=%d seq=%llu detect=%.1fms | RAW lmValid=%d "
-                 "reye=(%.1f,%.1f) nose=(%.1f,%.1f) roll=%+.1fdeg | TRACK valid=%d reye=(%.1f,%.1f) "
-                 "roll=%+.1fdeg",
+                 "reye=(%.1f,%.1f) leye=(%.1f,%.1f) nose=(%.1f,%.1f) roll=%+.1fdeg | TRACK valid=%d "
+                 "reye=(%.1f,%.1f) roll=%+.1fdeg",
                  (int)e.faceTracking, (int)avail, (int)r.faces.size(), (unsigned long long)r.sequence,
-                 r.detectMs, (int)lv, rx, ry, nx, ny, rroll * 57.29577951308232, (int)tvalid, tx, ty,
-                 troll * 57.29577951308232);
+                 r.detectMs, (int)lv, rx, ry, lx, ly, nx, ny, rroll * 57.29577951308232, (int)tvalid,
+                 tx, ty, troll * 57.29577951308232);
         }
     }
     // From the smoothed tracks build: distortion zones, debug markers and blur face boxes.
