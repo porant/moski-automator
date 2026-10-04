@@ -21,6 +21,11 @@ uniform float4 face_box[8];       // cx, cy, w, h (percent of frame)
 uniform bool debug_points = false;
 uniform int marker_count = 0;
 uniform float4 marker_data[24];   // x, y (centre %), z (size %), w (point index)
+// Meme morphs: signed strength (-1..1, 0 = off) of BigHead, Squash, Swirl, Melt, Mirror, Tilt,
+// applied to morph_count detected faces. morph_count is 0 unless a morph is active. Keep in sync
+// with opa::morphCount in src/animation.hpp.
+uniform float morph_value[6];
+uniform int morph_count = 0;
 
 sampler_state textureSampler {
     Filter = Linear;
@@ -79,6 +84,65 @@ float2 distortZone(
 }
 
 // ------------------------------------------------------------
+// Meme morphs: whole-face warps on the aspect-corrected UVs. `v` is a signed strength (0 = off).
+// Written without early returns or continue so the shader compiles to straight-line / simple
+// control flow (a dynamic loop with early exits inside a called function hung the GPU on some
+// drivers). Each type remaps the region UV differently.
+// ------------------------------------------------------------
+float2 rotateUV(float2 p, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+float2 morphUV(float2 uv, int type, float2 c, float2 bx, float v)
+{
+    float2 result = uv;
+    if (abs(v) >= 0.0005)
+    {
+        float2 p = uv - c;
+        if (type == 0)
+        {
+            // Big head: uniform zoom about the face centre (v > 0 enlarges, v < 0 shrinks).
+            p /= max(0.2, 1.0 + 0.6 * v);
+            result = c + p;
+        }
+        else if (type == 1)
+        {
+            // Squash / stretch: non-uniform scale (v > 0 widens, v < 0 makes the face taller).
+            float k = 0.45 * v;
+            result = c + p * float2(1.0 - k, 1.0 + k);
+        }
+        else if (type == 2)
+        {
+            // Swirl: rotate more toward the centre of the face.
+            float d = clamp(length(p) / max(bx.x, 0.0001), 0.0, 1.0);
+            result = c + rotateUV(p, v * 1.6 * (1.0 - d));
+        }
+        else if (type == 3)
+        {
+            // Melt: sag downward, stronger toward the chin.
+            float top = c.y - bx.y;
+            float rel = clamp((uv.y - top) / max(2.0 * bx.y, 0.0001), 0.0, 1.0);
+            result = float2(uv.x, uv.y - v * rel * bx.y * 0.9);
+        }
+        else if (type == 4)
+        {
+            // Mirror: flip the face horizontally (acts as an on/off warp).
+            float m = step(0.5, abs(v));
+            result = c + float2(lerp(p.x, -p.x, m), p.y);
+        }
+        else if (type == 5)
+        {
+            // Tilt: rotate the whole face region.
+            result = c + rotateUV(p, v * 0.6);
+        }
+    }
+    return result;
+}
+
+// ------------------------------------------------------------
 // MAIN
 // ------------------------------------------------------------
 float4 mainImage(VertData v_in) : TARGET
@@ -103,6 +167,36 @@ float4 mainImage(VertData v_in) : TARGET
         if (animate)
             mag *= sin(radians(elapsed_time * 20.0));
         correctedUV = distortZone(correctedUV, center, z.z / 100.0, mag);
+    }
+
+    // ---------- MEME MORPHS: whole-face warps on the first morph_count detected faces ----------
+    // morph_count is 0 unless a morph is enabled, so this costs nothing when morphs are off.
+    if (morph_count > 0)
+    {
+        for (int fi = 0; fi < 8; fi++) // 8 = maxFaces; fixed bound keeps the loop compiler-friendly
+        {
+            if (fi >= morph_count)
+                break;
+            float4 b = face_box[fi];
+            float2 c = float2(b.x / 100.0, b.y / 100.0);
+            c.x /= ar;
+            float2 bx = float2(b.z / 100.0 * 0.5, b.w / 100.0 * 0.5);
+            bx.x /= ar;
+            bx *= 1.15; // region a little larger than the box so the warp fades out softly
+            float2 q = (correctedUV - c) / max(bx, float2(0.0001, 0.0001));
+            float region = 1.0 - smoothstep(0.7, 1.0, length(q));
+            if (region > 0.0)
+            {
+                float2 warped = correctedUV;
+                warped = morphUV(warped, 0, c, bx, morph_value[0]);
+                warped = morphUV(warped, 1, c, bx, morph_value[1]);
+                warped = morphUV(warped, 2, c, bx, morph_value[2]);
+                warped = morphUV(warped, 3, c, bx, morph_value[3]);
+                warped = morphUV(warped, 4, c, bx, morph_value[4]);
+                warped = morphUV(warped, 5, c, bx, morph_value[5]);
+                correctedUV = lerp(correctedUV, warped, region);
+            }
+        }
     }
 
     // Sample the (morph-applied) image. correctedUV is aspect-corrected, so undo x for sampling.
