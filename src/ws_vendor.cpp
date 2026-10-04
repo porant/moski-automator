@@ -239,7 +239,7 @@ static void callback(obs_data_t *r, obs_data_t *out, void *priv) {
             obs_data_set_double(item, "width", face.w);
             obs_data_set_double(item, "height", face.h);
             obs_data_set_double(item, "score", face.score);
-            // Anchor points (percent): forehead, nose bridge, below the chin.
+            // Anchor points (percent): eyes, nose tip, mouth.
             auto *anchors = obs_data_array_create();
             for (int a = 0; a < pointCount; ++a) {
                 auto *ap = obs_data_create();

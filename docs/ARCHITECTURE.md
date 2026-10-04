@@ -66,7 +66,7 @@ WebSocket/GUI меняют только маленькие числовые со
 
 `AnimatedParameter` содержит состояние одной величины, допустимый диапазон, bool flag, значение покоя (rest), return endpoint и настройки move/hold/return. При запуске настройки возврата фиксируются для данного движения; новые настройки влияют на следующие запуски.
 
-`ZoneController` содержит Enable, Offset X, Offset Y, Radius, Magnitude одной точки. `AnimationController` содержит ровно три ZoneController (лоб / переносица / ниже подбородка), всего 15 AnimatedParameter. В нём нет OBS API или GPU кода.
+`ZoneController` содержит Enable, Offset X, Offset Y, Radius, Magnitude одной точки. `AnimationController` содержит ровно три ZoneController (глаза / нос / рот), всего 15 AnimatedParameter. В нём нет OBS API или GPU кода.
 
 `Easing` вычисляет только преобразование прогресса. `Engine` добавляет mutex, режим, defaults, частоту, короткий лог и метрики. `ShaderController` владеет GPU effect, uniform handles и shared_ptr Engine.
 

@@ -33,8 +33,8 @@ struct FaceRect {
     double w = 0;     // width, percent
     double h = 0;     // height, percent
     double score = 0; // confidence 0..1
-    // Three anchors derived from the YuNet landmarks, percent units:
-    //   [0] forehead, [1] nose bridge, [2] below the chin.
+    // Three anchors placed on the YuNet landmarks, percent units:
+    //   [0] eyes (midpoint of both eyes), [1] nose tip, [2] mouth (midpoint of the corners).
     FacePoint anchor[3];
     // Raw YuNet landmarks in percent units, order: right eye, left eye, nose tip, right/left mouth
     // corner. Zeroed when the detector could not supply them. Kept for feature-anchored morphs

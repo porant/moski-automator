@@ -11,16 +11,15 @@ When **Face tracking** is on and a point magnitude or a meme morph is non-zero, 
    second (default 10 FPS) - not once per rendered frame.
 2. Hands that frame to a **background worker thread** that runs OpenCV's YuNet
    (`cv::FaceDetectorYN`) on the CPU.
-3. For every detected face, derives **three anchor points** from the YuNet landmarks along the
-   **face's own axes**, so they follow the head's size and tilt (roll/pitch), not the frame's
-   up/down:
-   * **Point 1 - forehead**: `eyeMid + 0.9 * (eyeMid - nose)` - continued above the eyes along the
-     eye->nose direction,
-   * **Point 2 - nose bridge**: halfway between the eye midpoint and the nose tip,
-   * **Point 3 - below the chin**: `mouthMid + 0.9 * (mouthMid - nose)` - continued below the mouth
-     along the nose->mouth direction.
-   Because these directions come from the landmarks, a tilted or turned head moves the points with
-   it. If landmarks are missing, fractions of the detection box are used as a fallback.
+3. For every detected face, places **three anchor points directly on the YuNet landmarks**, so they
+   sit on the actual facial features and follow the head's size, tilt (roll) and turn
+   (yaw/pitch) with the features themselves:
+   * **Point 1 - eyes**: the midpoint of the two eyes,
+   * **Point 2 - nose**: the nose tip,
+   * **Point 3 - mouth**: the midpoint of the two mouth corners.
+   Because the anchors are the landmarks themselves, a tilted, turned or nodding head moves the
+   points exactly with it. If landmarks are missing, fractions of the detection box are used as a
+   fallback.
 4. Draws one circular distortion zone per (face x enabled point). Where a point lands is
    `anchor + offset`; the point's own `radius` and `magnitude` are shared by all faces.
 
@@ -29,7 +28,7 @@ shader uses - and faces are sorted **left to right**.
 
 The **animation is configured per point**, in advance, before any face is seen. `Add` / `Set` /
 `Start` animate a point's magnitude (or offset/radius); the accumulation of `Add` is shared by
-**all faces** at that point. So one `Add` to `point2_magnitude` pulses the nose bridge of every
+**all faces** at that point. So one `Add` to `point2_magnitude` pulses the nose of every
 detected face.
 
 ## Shader
@@ -104,7 +103,7 @@ Global (filter properties, **Face tracking** group):
 Top-level (not part of the Face tracking group): `effect_blur` + `face_blur_px` and `effect_debug`
 are independent options - see **Independent effects** above.
 
-Per point (three groups: **Forehead**, **Nose bridge**, **Below chin**). Names are `point1_*`,
+Per point (three groups: **Eyes**, **Nose**, **Mouth**). Names are `point1_*`,
 `point2_*`, `point3_*` with the parameter suffix:
 
 | Suffix | Default | Meaning |
@@ -156,7 +155,7 @@ All request fields are optional, so an empty request just reports the current fa
 ```
 
 `Get` responses also include `faces`, where each face carries `centerX`, `centerY`, `width`,
-`height`, `score` and an `anchors` array of `{name, x, y}` (forehead / nose bridge / below chin) in
+`height`, `score` and an `anchors` array of `{name, x, y}` (eyes / nose / mouth) in
 percent units, plus `faceTracking`, `faceAvailable`, `faceSequence` and `faceDetectMs`.
 
 ## Limitations

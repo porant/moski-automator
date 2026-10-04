@@ -24,7 +24,7 @@
 #include <algorithm>
 using namespace opa;
 
-// The dock edits the three face points (forehead / nose bridge / below chin). Positions come from
+// The dock edits the three face points (eyes / nose / mouth). Positions come from
 // face detection; here you configure each point's offset, radius, magnitude and animation.
 class AnimatorPanel : public QWidget {
     QComboBox *filters = nullptr, *modeBox = nullptr, *pointBox = nullptr;
@@ -363,7 +363,7 @@ class AnimatorPanel : public QWidget {
         magSld->setValue((int)std::lround(v.magnitude * 1000));
         enabledBox->setChecked(v.enabled);
         const QString hintText = QStringLiteral(
-            "Positions come from face detection (forehead / nose bridge / below chin). Offset nudges "
+            "Positions come from face detection (eyes / nose / mouth). Offset nudges "
             "the point (percent), radius is percent of the frame height, magnitude is the distortion "
             "strength. Add/Set/Start animate the selected point on every detected face.");
         if (hint->text() != hintText)
@@ -490,9 +490,10 @@ class AnimatorPanel : public QWidget {
         blurBox->setToolTip("Blur the whole detected face box (covers/anonimises the face). "
                             "Independent of the distortion.");
         debugBox = new QCheckBox("Debug points");
-        debugBox->setToolTip("Overlay the detected points: face-point anchors (red / green / blue) "
-                             "and raw landmarks (yellow / cyan = eyes, magenta = nose tip, orange / "
-                             "violet = mouth corners). Independent of the distortion.");
+        debugBox->setToolTip("Overlay the detected points: face-point anchors (red = eyes, green = "
+                             "nose, blue = mouth) and raw landmarks (yellow / cyan = eyes, magenta "
+                             "= nose tip, orange / violet = mouth corners). Independent of the "
+                             "distortion.");
         blurPxSpin = new QDoubleSpinBox;
         blurPxSpin->setRange(2, 128);
         blurPxSpin->setSuffix(" px");

@@ -9,7 +9,7 @@
 #include <vector>
 namespace opa {
 constexpr const char *filterId = "opa_6zone_distortion";
-// A face contributes up to pointCount zones (forehead / nose bridge / below chin); the shader's
+// A face contributes up to pointCount zones (eyes / nose / mouth); the shader's
 // zone_data array is sized for maxFaces faces.
 constexpr int maxFaces = 8;
 constexpr int maxZones = maxFaces * pointCount;

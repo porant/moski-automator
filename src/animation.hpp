@@ -202,9 +202,10 @@ struct AnimatedParameter {
         return boolean ? (state.currentValue >= .5 ? 1.0 : 0.0) : state.currentValue;
     }
 };
-// The plugin animates three "points" that are drawn on every detected face: 0 = forehead,
-// 1 = nose bridge, 2 = below the chin. Each point keeps five parameters: enable (bool),
-// offset_x, offset_y (percent, added to the detected anchor), radius (percent) and magnitude.
+// The plugin animates three "points" that are drawn on every detected face, anchored on the YuNet
+// landmarks: 0 = eyes (midpoint), 1 = nose tip, 2 = mouth (midpoint). Each point keeps five
+// parameters: enable (bool), offset_x, offset_y (percent, added to the detected anchor), radius
+// (percent) and magnitude.
 constexpr int pointCount = 3;
 constexpr int pointParamCount = 5;
 constexpr int paramCount = pointCount * pointParamCount;
@@ -302,9 +303,9 @@ inline int parameterIndex(const std::string &name) {
             return i;
     return -1;
 }
-// Human-readable name of a point (0 forehead, 1 nose bridge, 2 below chin).
+// Human-readable name of a point (0 eyes, 1 nose, 2 mouth).
 inline const char *pointName(int point) {
-    constexpr const char *names[pointCount] = {"Forehead", "Nose bridge", "Below chin"};
+    constexpr const char *names[pointCount] = {"Eyes", "Nose", "Mouth"};
     return (point >= 0 && point < pointCount) ? names[point] : "?";
 }
 } // namespace opa

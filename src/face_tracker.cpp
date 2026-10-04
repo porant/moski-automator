@@ -167,17 +167,17 @@ struct FaceTracker::Impl {
                             std::lock_guard<std::mutex> lock(cfgMutex);
                             error = "pose failed: unknown exception";
                         }
-                        // Face-local axes from the landmarks so the derived points follow head roll
-                        // and pitch instead of always going straight up/down in frame space:
-                        //   eyeMid - nose  = "up"   direction of the face
-                        //   mouthMid - nose = "down" direction of the face
+                        // Anchored directly on the YuNet landmarks, so each point sits on the actual
+                        // facial feature (no extrapolation) and therefore follows the head's size,
+                        // tilt (roll) and turn (yaw/pitch) exactly as the features themselves do:
+                        //   [0] eyes  = midpoint of the two eyes
+                        //   [1] nose  = nose tip
+                        //   [2] mouth = midpoint of the two mouth corners
                         const double emx = (rex + lex) * 0.5, emy = (rey + ley) * 0.5;
                         const double mmx = (rmx + lmx) * 0.5, mmy = (rmy + lmy) * 0.5;
-                        r.anchor[0] = {pctX(emx + 0.9 * (emx - ntx)),
-                                       pctY(emy + 0.9 * (emy - nty))};               // forehead
-                        r.anchor[1] = {pctX((emx + ntx) * 0.5), pctY((emy + nty) * 0.5)}; // nose bridge
-                        r.anchor[2] = {pctX(mmx + 0.9 * (mmx - ntx)),
-                                       pctY(mmy + 0.9 * (mmy - nty))};               // below chin
+                        r.anchor[0] = {pctX(emx), pctY(emy)}; // eyes
+                        r.anchor[1] = {pctX(ntx), pctY(nty)}; // nose
+                        r.anchor[2] = {pctX(mmx), pctY(mmy)}; // mouth
                     } else {
                         // Landmarks unavailable: fall back to fractions of the detection box.
                         r.anchor[0] = {r.cx, std::clamp(r.cy - 0.45 * r.h, -50.0, 150.0)};

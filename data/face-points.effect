@@ -84,17 +84,17 @@ float2 distortZone(
 }
 
 // ------------------------------------------------------------
-// Debug marker colours: 0..2 = point anchors (forehead / nose bridge / below chin),
+// Debug marker colours: 0..2 = point anchors (eyes / nose / mouth),
 // 3..7 = raw YuNet landmarks (right eye, left eye, nose tip, right mouth, left mouth).
 // ------------------------------------------------------------
 float3 markerColor(int idx)
 {
     if (idx == 0)
-        return float3(1.0, 0.25, 0.25); // forehead      - red
+        return float3(1.0, 0.25, 0.25); // eyes          - red
     if (idx == 1)
-        return float3(0.25, 1.0, 0.25); // nose bridge   - green
+        return float3(0.25, 1.0, 0.25); // nose          - green
     if (idx == 2)
-        return float3(0.3, 0.6, 1.0); // below chin     - blue
+        return float3(0.3, 0.6, 1.0); // mouth         - blue
     if (idx == 3)
         return float3(1.0, 0.85, 0.15); // right eye      - yellow
     if (idx == 4)
