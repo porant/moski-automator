@@ -666,27 +666,6 @@ static void render(void *v, gs_effect_t *) {
             e.lastFaceSmoothTime = -1;
         }
     }
-    // Throttled face-tracking status so a plain OBS log shows whether the detector is receiving
-    // frames (available=1, seq increasing) and finding faces (faces>0) - or not.
-    {
-        static double lastFaceLog = 0;
-        const double nowLog = nowSeconds();
-        if (nowLog - lastFaceLog >= 5.0) {
-            lastFaceLog = nowLog;
-            auto &e = *f.engine;
-            bool avail = false;
-            {
-                std::lock_guard lock(e.mutex);
-                avail = e.faceTracking && e.tracker && e.tracker->available();
-            }
-            FaceTracker::Result r;
-            if (e.tracker)
-                r = e.tracker->result();
-            blog(LOG_INFO, "[OPA] face: tracking=%d available=%d faces=%d seq=%llu detect=%.1fms",
-                 (int)e.faceTracking, (int)avail, (int)r.faces.size(),
-                 (unsigned long long)r.sequence, r.detectMs);
-        }
-    }
     // From the smoothed tracks build: distortion zones, debug markers and blur face boxes.
     std::array<float, maxZones * 4> zones{};
     std::array<float, maxZones * 4> markers{};
