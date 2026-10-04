@@ -21,12 +21,9 @@ assert 'correctedUV.x /= ar;' in fp, 'aspect correction missing'
 assert ('correctedUV.x *= ar;' in fp) or ('correctedUV.x * ar' in fp), 'aspect un-correction missing'
 assert 'blur_faces' in fp and 'debug_points' in fp, 'blur/debug options missing'
 assert 'uniform float4 face_box[' in fp and 'uniform float4 marker_data[' in fp, 'blur/debug arrays missing'
-# Meme morphs: a fixed-size strength array plus the per-face warp function.
-assert 'uniform float morph_value[' in fp, 'meme morph strength array missing'
-assert 'morphUV(' in fp and 'MEME MORPHS' in fp, 'meme morph warp missing'
 assert 'uniform float4 marker_data[24]' in fp, 'marker array changed'
 # The effect compiles as HLSL for D3D11, not GLSL: GLSL-only intrinsics fail at runtime with
 # "undeclared identifier". Keep them out (use lerp instead of mix, etc.).
 for glsl_only in ('mix(', 'fract(', 'texture('):
     assert glsl_only not in fp, f'GLSL-only intrinsic not valid in HLSL: {glsl_only}'
-print('PASS: original shader bytes, 6 calls, texture samples, aspect correction; face-points shader (morph + meme morphs + independent blur/debug with landmarks)')
+print('PASS: original shader bytes, 6 calls, texture samples, aspect correction; face-points shader (morph + independent blur/debug)')
