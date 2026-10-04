@@ -23,8 +23,14 @@ uniform int marker_count = 0;
 uniform float4 marker_data[24];   // x, y (centre %), z (size %), w (point index)
 // Meme morphs: signed strength (-1..1, 0 = off) of BigHead, Squash, Swirl, Melt, Mirror, Tilt,
 // applied to morph_count detected faces. morph_count is 0 unless a morph is active. Keep in sync
-// with opa::morphCount in src/animation.hpp.
-uniform float morph_value[6];
+// with opa::morphCount in src/animation.hpp. Kept as individual scalars (not a float array) so the
+// uniform packing matches the working scalar uniforms (zone_count / marker_count / face_count).
+uniform float morph0 = 0.0;
+uniform float morph1 = 0.0;
+uniform float morph2 = 0.0;
+uniform float morph3 = 0.0;
+uniform float morph4 = 0.0;
+uniform float morph5 = 0.0;
 uniform int morph_count = 0;
 
 sampler_state textureSampler {
@@ -192,10 +198,10 @@ float4 mainImage(VertData v_in) : TARGET
             if (region > 0.0)
             {
                 float2 warped = correctedUV;
-                // BISECTION BUILD: only Big head is applied; the other morph functions are unused and
-                // get dead-code-eliminated, so the shader stays close to the original size. This
-                // isolates whether the full morph set is what upsets the GPU.
-                warped = morphBigHead(warped, c, morph_value[0]);
+                // Uniform-packing test build: only Big head is applied (its morph strength comes
+                // from the scalar uniform morph0 instead of a float array). This isolates whether
+                // the float-array uniform was what upset the driver.
+                warped = morphBigHead(warped, c, morph0);
                 correctedUV = lerp(correctedUV, warped, region);
             }
         }
