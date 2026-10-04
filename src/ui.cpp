@@ -336,26 +336,48 @@ class AnimatorPanel : public QWidget {
         }
     }
 
+    // The slider and the spin box of one point parameter are two views of the same number. Writing
+    // that number into both here (while `updating` is held true so the valueChanged round-trip is
+    // ignored) is what keeps them in lock-step no matter which control the user touched.
+    // `sliderScale` is the number of slider steps per stored unit and must match the range that
+    // addRow() created the slider with.
+    void setPair(int which, double v) {
+        QSlider *slider = nullptr;
+        QDoubleSpinBox *spin = nullptr;
+        double sliderScale = 10.0;
+        switch (which) {
+        case 0: slider = cxSld; spin = cxSpin; break;
+        case 1: slider = cySld; spin = cySpin; break;
+        case 2: slider = radSld; spin = radSpin; break;
+        default: slider = magSld; spin = magSpin; sliderScale = 1000.0; break;
+        }
+        const bool guard = updating;
+        updating = true;
+        if (slider)
+            slider->setValue((int)std::lround(v * sliderScale));
+        if (spin)
+            spin->setValue(v);
+        updating = guard;
+    }
+
     void syncControls() {
+        const bool guard = updating;
         updating = true;
         const int z = pointBox->currentIndex();
         const auto &v = points[z];
-        cxSpin->setValue(v.cx);
-        cySpin->setValue(v.cy);
-        radSpin->setValue(v.radius);
-        magSpin->setValue(v.magnitude);
-        cxSld->setValue((int)std::lround(v.cx));
-        cySld->setValue((int)std::lround(v.cy));
-        radSld->setValue((int)std::lround(v.radius));
-        magSld->setValue((int)std::lround(v.magnitude * 1000));
+        setPair(0, v.cx);
+        setPair(1, v.cy);
+        setPair(2, v.radius);
+        setPair(3, v.magnitude);
         enabledBox->setChecked(v.enabled);
         const QString hintText = QStringLiteral(
-            "Positions come from face detection (eyes / nose / mouth). Offset nudges "
-            "the point (percent), radius is percent of the frame height, magnitude is the distortion "
-            "strength. Add/Set/Start animate the selected point on every detected face.");
+            "Positions are detected on every face (eyes / nose / mouth). Offset nudges the point "
+            "(percent of the frame), radius is a percent of the frame height, magnitude is the "
+            "distortion strength. The slider and the box always show the same value; Add / Set / "
+            "Start animate this point on all detected faces.");
         if (hint->text() != hintText)
             hint->setText(hintText);
-        updating = false;
+        updating = guard;
     }
 
   public:
@@ -377,49 +399,35 @@ class AnimatorPanel : public QWidget {
         auto *visual = new QWidget;
         auto *vl = new QVBoxLayout(visual);
         vl->setContentsMargins(6, 6, 6, 6);
-        vl->setSpacing(6);
+        vl->setSpacing(8);
 
-        auto *modeRow = new QHBoxLayout;
-        modeRow->addWidget(new QLabel("Mode:"));
+        auto *intro = new QLabel("The three points are placed on every detected face. Choose a "
+                                 "point, set where it sits and how it animates.");
+        intro->setWordWrap(true);
+        vl->addWidget(intro);
+
+        // ---- 1. Playback mode ----
+        auto *modeGroup = new QGroupBox("Playback mode");
+        auto *modeLay = new QHBoxLayout(modeGroup);
+        modeLay->setSpacing(6);
         modeBox = new QComboBox;
         modeBox->addItems({"Static", "Shader sine animation", "Plugin animation"});
-        modeRow->addWidget(modeBox);
-        modeRow->addStretch(1);
-        vl->addLayout(modeRow);
+        modeBox->setToolTip("Static: the points stay where they are, no animation. "
+                            "Shader: the GPU shader moves the magnitude by itself. "
+                            "Plugin: this dock drives the animation (recommended).");
+        modeLay->addWidget(modeBox, 1);
+        vl->addWidget(modeGroup);
 
-        // Blur and debug are independent of the point distortion, so they are plain checkboxes.
-        auto *renderRow = new QHBoxLayout;
-        blurBox = new QCheckBox("Blur faces");
-        blurBox->setToolTip("Blur the whole detected face box (covers/anonimises the face). "
-                            "Independent of the distortion.");
-        debugBox = new QCheckBox("Debug points");
-        debugBox->setToolTip("Overlay the detection box and the three point anchors: red = eyes, "
-                             "green = nose, blue = mouth. Independent of the distortion.");
-        blurPxSpin = new QDoubleSpinBox;
-        blurPxSpin->setRange(2, 128);
-        blurPxSpin->setSuffix(" px");
-        blurPxSpin->setValue(24);
-        blurPxSpin->setFixedWidth(78);
-        blurPxSpin->setToolTip("Blur radius in pixels.");
-        renderRow->addWidget(blurBox);
-        renderRow->addWidget(blurPxSpin);
-        renderRow->addSpacing(8);
-        renderRow->addWidget(debugBox);
-        renderRow->addStretch(1);
-        vl->addLayout(renderRow);
-
-        auto *scaleRow = new QHBoxLayout;
-        scaleBox = new QCheckBox("Scale points to face size");
-        scaleBox->setToolTip("Radius and offsets are relative to the detected face height, so a "
-                            "distant face gets proportionally smaller points.");
-        scaleRow->addWidget(scaleBox);
-        scaleRow->addStretch(1);
-        vl->addLayout(scaleRow);
-
+        // ---- 2. Face tracking ----
+        auto *faceGroup = new QGroupBox("Face tracking");
+        auto *fg = new QVBoxLayout(faceGroup);
+        fg->setSpacing(4);
         auto *faceRow = new QHBoxLayout;
         faceBox = new QCheckBox("Track faces");
+        faceBox->setToolTip("Detect faces and place the three points (eyes / nose / mouth) on each "
+                            "of them.");
         faceRow->addWidget(faceBox);
-        faceRow->addWidget(new QLabel("smoothing"));
+        faceRow->addWidget(new QLabel("Smoothing"));
         smoothSpin = new QDoubleSpinBox;
         smoothSpin->setRange(0, 1000);
         smoothSpin->setSuffix(" ms");
@@ -429,47 +437,93 @@ class AnimatorPanel : public QWidget {
                                "smoothing (raw, jittery); higher = smoother but slower to follow.");
         faceRow->addWidget(smoothSpin);
         faceRow->addStretch(1);
-        vl->addLayout(faceRow);
+        fg->addLayout(faceRow);
         faceStatus = new QLabel("Tracking off");
         faceStatus->setWordWrap(true);
-        vl->addWidget(faceStatus);
+        fg->addWidget(faceStatus);
+        vl->addWidget(faceGroup);
 
+        // ---- 3. Overlay options (independent of the distortion) ---------------
+        auto *optGroup = new QGroupBox("Overlay options");
+        auto *og = new QVBoxLayout(optGroup);
+        og->setSpacing(4);
+        auto *renderRow = new QHBoxLayout;
+        blurBox = new QCheckBox("Blur faces");
+        blurBox->setToolTip("Blur the whole detected face box (covers/anonimises the face). "
+                            "Independent of the distortion.");
+        blurPxSpin = new QDoubleSpinBox;
+        blurPxSpin->setRange(2, 128);
+        blurPxSpin->setSuffix(" px");
+        blurPxSpin->setValue(24);
+        blurPxSpin->setFixedWidth(78);
+        blurPxSpin->setToolTip("Blur radius in pixels.");
+        renderRow->addWidget(blurBox);
+        renderRow->addWidget(blurPxSpin);
+        renderRow->addSpacing(12);
+        debugBox = new QCheckBox("Debug points");
+        debugBox->setToolTip("Overlay the detection box and the three point anchors: red = eyes, "
+                             "green = nose, blue = mouth. Independent of the distortion.");
+        renderRow->addWidget(debugBox);
+        renderRow->addStretch(1);
+        og->addLayout(renderRow);
+        auto *scaleRow = new QHBoxLayout;
+        scaleBox = new QCheckBox("Scale points with face size");
+        scaleBox->setToolTip("Radius and offsets are relative to the detected face height, so a "
+                             "distant face gets proportionally smaller points.");
+        scaleRow->addWidget(scaleBox);
+        scaleRow->addStretch(1);
+        og->addLayout(scaleRow);
+        vl->addWidget(optGroup);
+
+        // ---- 4. Point rest position ----
+        auto *pointGroup = new QGroupBox("Point - rest position");
+        auto *pg = new QVBoxLayout(pointGroup);
+        pg->setSpacing(4);
         auto *prow = new QHBoxLayout;
         prow->addWidget(new QLabel("Point:"));
         pointBox = new QComboBox;
         for (int p = 0; p < pointCount; ++p)
             pointBox->addItem(pointName(p));
+        pointBox->setToolTip("Which landmark point to edit: 1 = Eyes, 2 = Nose, 3 = Mouth.");
         prow->addWidget(pointBox);
-        enabledBox = new QCheckBox("enabled");
+        enabledBox = new QCheckBox("Draw this point");
+        enabledBox->setToolTip("Draw the point on every detected face.");
         prow->addWidget(enabledBox);
         prow->addStretch(1);
-        vl->addLayout(prow);
+        pg->addLayout(prow);
 
         auto *grid = new QGridLayout;
         grid->setVerticalSpacing(2);
         grid->setHorizontalSpacing(6);
-        auto addRow = [&](int r, const QString &name, QSlider *&sl, QDoubleSpinBox *&sp, double lo,
-                          double hi, double step, bool scaled) {
+        auto addRow = [&](int r, const QString &name, const QString &tip, QSlider *&sl,
+                          QDoubleSpinBox *&sp, double lo, double hi, double scale, int decimals) {
             grid->addWidget(new QLabel(name), r, 0);
             sl = new QSlider(Qt::Horizontal);
-            sl->setRange(scaled ? (int)std::lround(lo * 1000) : (int)lo,
-                         scaled ? (int)std::lround(hi * 1000) : (int)hi);
+            sl->setRange((int)std::lround(lo * scale), (int)std::lround(hi * scale));
+            sl->setToolTip(tip);
             grid->addWidget(sl, r, 1);
             sp = new QDoubleSpinBox;
             sp->setRange(lo, hi);
-            sp->setSingleStep(step);
-            sp->setDecimals(scaled ? 3 : 1);
+            sp->setDecimals(decimals);
+            sp->setSingleStep(1.0 / scale);
             sp->setFixedWidth(92);
+            sp->setToolTip(tip);
             grid->addWidget(sp, r, 2);
         };
-        addRow(0, "Offset X", cxSld, cxSpin, -100, 100, 0.5, false);
-        addRow(1, "Offset Y", cySld, cySpin, -100, 100, 0.5, false);
-        addRow(2, "Radius", radSld, radSpin, 0, 100, 0.5, false);
-        addRow(3, "Magnitude", magSld, magSpin, -1.3333, 1.3333, 0.05, true);
-        vl->addLayout(grid);
+        addRow(0, "Offset X (%)", "Push the point left / right from its detected position.",
+               cxSld, cxSpin, -100, 100, 10, 1);
+        addRow(1, "Offset Y (%)", "Push the point up / down from its detected position.",
+               cySld, cySpin, -100, 100, 10, 1);
+        addRow(2, "Radius (%)", "Radius of the distortion zone, as a percent of the frame height.",
+               radSld, radSpin, 0, 100, 10, 1);
+        addRow(3, "Magnitude", "Distortion strength: above 0 bulges outwards, below 0 pinches "
+                               "inwards (range -1.3333 to 1.3333).",
+               magSld, magSpin, -1.3333, 1.3333, 1000, 3);
+        pg->addLayout(grid);
+        vl->addWidget(pointGroup);
 
         // ---- timing: outgoing move, then the automatic return after the last Add ----
-        auto *timing = new QGroupBox("Duration and return");
+        auto *timing = new QGroupBox("Move & auto-return timing");
         auto *tg = new QGridLayout(timing);
         tg->setVerticalSpacing(2);
         tg->setHorizontalSpacing(6);
@@ -515,7 +569,7 @@ class AnimatorPanel : public QWidget {
         vl->addWidget(timing);
 
         // ---- test: everything needed to see the effect without leaving the first tab ----
-        auto *testBox = new QGroupBox("Test");
+        auto *testBox = new QGroupBox("Test this point");
         auto *tt = new QGridLayout(testBox);
         tt->setVerticalSpacing(2);
         tt->setHorizontalSpacing(6);
@@ -546,8 +600,8 @@ class AnimatorPanel : public QWidget {
         vl->addWidget(testBox);
 
         auto *pointButtons = new QHBoxLayout;
-        auto *playAll = new QPushButton("Play all points");
-        auto *playPointBtn = new QPushButton("Play this point");
+        auto *playAll = new QPushButton("Start all points");
+        auto *playPointBtn = new QPushButton("Start this point");
         auto *stopAll = new QPushButton("Stop all");
         auto *resetAll = new QPushButton("All points back to rest");
         for (auto *b : {playAll, playPointBtn, stopAll, resetAll})
@@ -728,15 +782,19 @@ class AnimatorPanel : public QWidget {
                 a.radius = v;
             else
                 a.magnitude = v;
+            // Mirror the number into the paired control so the slider and the box never disagree.
+            setPair(which, v);
             pushLater();
         };
-        connect(cxSld, &QSlider::valueChanged, this, [this, setter](int v) { if (!updating) setter(0, v); });
+        // The offset / radius sliders are scaled by 10 and the magnitude slider by 1000, so divide
+        // the raw slider step back into value units here. setPair() uses the same scales.
+        connect(cxSld, &QSlider::valueChanged, this, [this, setter](int v) { if (!updating) setter(0, v / 10.0); });
         connect(cxSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, setter](double v) { if (!updating) setter(0, v); });
-        connect(cySld, &QSlider::valueChanged, this, [this, setter](int v) { if (!updating) setter(1, v); });
+        connect(cySld, &QSlider::valueChanged, this, [this, setter](int v) { if (!updating) setter(1, v / 10.0); });
         connect(cySpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, setter](double v) { if (!updating) setter(1, v); });
-        connect(radSld, &QSlider::valueChanged, this, [this, setter](int v) { if (!updating) setter(2, v); });
+        connect(radSld, &QSlider::valueChanged, this, [this, setter](int v) { if (!updating) setter(2, v / 10.0); });
         connect(radSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, setter](double v) { if (!updating) setter(2, v); });
         connect(magSld, &QSlider::valueChanged, this, [this, setter](int v) { if (!updating) setter(3, v / 1000.0); });
