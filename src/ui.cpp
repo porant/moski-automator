@@ -39,7 +39,7 @@ class AnimatorPanel : public QWidget {
 
     std::array<ZoneView, pointCount> points{};
     QCheckBox *enabledBox = nullptr, *faceBox = nullptr;
-    QDoubleSpinBox *smoothSpin = nullptr;
+    QDoubleSpinBox *smoothSpin = nullptr, *faceHoldSpin = nullptr, *faceFadeSpin = nullptr;
     QLabel *faceStatus = nullptr, *hint = nullptr;
     QSlider *cxSld = nullptr, *cySld = nullptr, *radSld = nullptr, *magSld = nullptr;
     QDoubleSpinBox *cxSpin = nullptr, *cySpin = nullptr, *radSpin = nullptr, *magSpin = nullptr;
@@ -116,6 +116,8 @@ class AnimatorPanel : public QWidget {
         blurPxSpin->setValue(obs_data_get_double(s, "face_blur_px"));
         scaleBox->setChecked(obs_data_get_bool(s, "face_scale"));
         smoothSpin->setValue(obs_data_get_double(s, "face_smooth_ms"));
+        faceHoldSpin->setValue(obs_data_get_double(s, "face_hold_ms"));
+        faceFadeSpin->setValue(obs_data_get_double(s, "face_fade_ms"));
         const auto k = prefix(pointBox->currentIndex());
         const int defEase = std::clamp((int)obs_data_get_int(s, "default_easing"), 0, 30);
         int e = (int)obs_data_get_int(s, (k + "magnitude_easing").c_str());
@@ -310,6 +312,8 @@ class AnimatorPanel : public QWidget {
         p.mode = std::clamp<int>((int)obs_data_get_int(s, "mode"), 0, 2);
         p.faceTracking = obs_data_get_bool(s, "face_tracking");
         p.faceSmoothMs = obs_data_get_double(s, "face_smooth_ms");
+        p.faceHoldMs = obs_data_get_double(s, "face_hold_ms");
+        p.faceFadeMs = obs_data_get_double(s, "face_fade_ms");
         p.effectBlur = obs_data_get_bool(s, "effect_blur");
         p.faceBlurPx = obs_data_get_double(s, "face_blur_px");
         p.effectDebug = obs_data_get_bool(s, "effect_debug");
@@ -386,6 +390,8 @@ class AnimatorPanel : public QWidget {
         obs_data_set_int(s, "mode", p.mode);
         obs_data_set_bool(s, "face_tracking", p.faceTracking);
         obs_data_set_double(s, "face_smooth_ms", p.faceSmoothMs);
+        obs_data_set_double(s, "face_hold_ms", p.faceHoldMs);
+        obs_data_set_double(s, "face_fade_ms", p.faceFadeMs);
         obs_data_set_bool(s, "effect_blur", p.effectBlur);
         obs_data_set_double(s, "face_blur_px", p.faceBlurPx);
         obs_data_set_bool(s, "effect_debug", p.effectDebug);
@@ -643,6 +649,25 @@ class AnimatorPanel : public QWidget {
         smoothSpin->setToolTip("Ease the points toward each detection over this time. 0 = no "
                                "smoothing (raw, jittery); higher = smoother but slower to follow.");
         faceRow->addWidget(smoothSpin);
+        faceRow->addWidget(new QLabel("Hold"));
+        faceHoldSpin = new QDoubleSpinBox;
+        faceHoldSpin->setRange(0, 3600000);
+        faceHoldSpin->setSuffix(" ms");
+        faceHoldSpin->setValue(10000);
+        faceHoldSpin->setFixedWidth(90);
+        faceHoldSpin->setToolTip("If tracking loses a face, keep its points where they were last "
+                                 "seen for this long before it starts to fade (0 = fade at once). A "
+                                 "large value keeps the effect in place until the face returns.");
+        faceRow->addWidget(faceHoldSpin);
+        faceRow->addWidget(new QLabel("Fade"));
+        faceFadeSpin = new QDoubleSpinBox;
+        faceFadeSpin->setRange(0, 60000);
+        faceFadeSpin->setSuffix(" ms");
+        faceFadeSpin->setValue(1000);
+        faceFadeSpin->setFixedWidth(90);
+        faceFadeSpin->setToolTip("After the hold ends, fade a lost face's effect out over this long "
+                                 "so it disappears smoothly instead of popping away.");
+        faceRow->addWidget(faceFadeSpin);
         faceRow->addStretch(1);
         fg->addLayout(faceRow);
         faceStatus = new QLabel("Tracking off");
@@ -1091,6 +1116,30 @@ class AnimatorPanel : public QWidget {
                 return;
             obs_data_t *s = obs_source_get_settings(f);
             obs_data_set_double(s, "face_smooth_ms", v);
+            obs_source_update(f, s);
+            obs_data_release(s);
+            obs_source_release(f);
+        });
+        connect(faceHoldSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double v) {
+            if (updating)
+                return;
+            obs_source_t *f = resolve();
+            if (!f)
+                return;
+            obs_data_t *s = obs_source_get_settings(f);
+            obs_data_set_double(s, "face_hold_ms", v);
+            obs_source_update(f, s);
+            obs_data_release(s);
+            obs_source_release(f);
+        });
+        connect(faceFadeSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double v) {
+            if (updating)
+                return;
+            obs_source_t *f = resolve();
+            if (!f)
+                return;
+            obs_data_t *s = obs_source_get_settings(f);
+            obs_data_set_double(s, "face_fade_ms", v);
             obs_source_update(f, s);
             obs_data_release(s);
             obs_source_release(f);

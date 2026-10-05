@@ -155,7 +155,8 @@ Get-FileHash .\build\obs-parameter-animator.dll, .\stage\obs-plugins\64bit\obs-p
   Select-String -Path .\src\ui.cpp -Pattern '^\s*(\w+)\s*=\s*new ' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique
   ```
   В списке должны быть `modeBox, blurBox, blurPxSpin, debugBox, scaleBox, faceBox, smoothSpin,
-  pointBox, enabledBox, durSpin, easing, autoReturn, holdSpin, returnSpin, returnEasing, testParam,
+  pointBox, enabledBox, durSpin, easing, autoReturn, holdSpin, returnSpin, returnEasing,
+  faceHoldSpin, faceFadeSpin, testParam,
   testValue, table, value, duration, tableEasing, returnToBase, metrics, logs, logFilter, pause,
   jsonAction, jsonParam, jsonFormat, jsonValue, presetEdit, presetStatus,
   hint` (плюс `sl`/`sp` из `addRow` создают `cxSld/cySld/radSld/magSld` и `*Spin`, а

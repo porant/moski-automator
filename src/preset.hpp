@@ -31,6 +31,8 @@ struct Preset {
     int mode = 2;
     bool faceTracking = false;
     double faceSmoothMs = 120;
+    double faceHoldMs = 10000;
+    double faceFadeMs = 1000;
     bool effectBlur = false;
     double faceBlurPx = 24;
     bool effectDebug = false;
@@ -105,6 +107,8 @@ inline QString presetToJson(const Preset &p) {
     o.insert(QStringLiteral("mode"), p.mode);
     o.insert(QStringLiteral("face_tracking"), p.faceTracking);
     o.insert(QStringLiteral("face_smooth_ms"), p.faceSmoothMs);
+    o.insert(QStringLiteral("face_hold_ms"), p.faceHoldMs);
+    o.insert(QStringLiteral("face_fade_ms"), p.faceFadeMs);
     o.insert(QStringLiteral("effect_blur"), p.effectBlur);
     o.insert(QStringLiteral("face_blur_px"), p.faceBlurPx);
     o.insert(QStringLiteral("effect_debug"), p.effectDebug);
@@ -154,6 +158,12 @@ inline bool presetFromJson(const QString &text, Preset &out, QString *error) {
     r.faceSmoothMs =
         std::clamp(preset_detail::number(s, QStringLiteral("face_smooth_ms"), r.faceSmoothMs), 0.0,
                    2000.0);
+    r.faceHoldMs =
+        std::clamp(preset_detail::number(s, QStringLiteral("face_hold_ms"), r.faceHoldMs), 0.0,
+                   3600000.0);
+    r.faceFadeMs =
+        std::clamp(preset_detail::number(s, QStringLiteral("face_fade_ms"), r.faceFadeMs), 0.0,
+                   3600000.0);
     r.effectBlur = preset_detail::boolean(s, QStringLiteral("effect_blur"), r.effectBlur);
     r.faceBlurPx =
         std::clamp(preset_detail::number(s, QStringLiteral("face_blur_px"), r.faceBlurPx), 2.0, 128.0);

@@ -103,6 +103,8 @@ Global (filter properties, **Face tracking** group):
 | `face_score` | 0.7 | YuNet confidence threshold (0.1..0.95) |
 | `face_height` | 180 | Height the frame is downscaled to before detection (96..480) |
 | `face_smooth_ms` | 120 | Temporal smoothing of the point positions (0 = raw/jittery, higher = smoother) |
+| `face_hold_ms` | 10000 | When tracking loses a face, keep its points frozen at the last position for this long before it starts to fade (0 = fade at once; a large value ≈ hold until the face returns) |
+| `face_fade_ms` | 1000 | After the hold window elapses, fade a lost face's effect out over this long so it never pops away (the distortion shrinks, and the blur/debug box shrinks with it) |
 
 Top-level (not part of the Face tracking group): `effect_blur` + `face_blur_px` and `effect_debug`
 are independent options - see **Independent effects** above.
@@ -138,7 +140,20 @@ eased toward the latest detection on **every render frame**:
 
 * `track += (detection - track) * alpha`, `alpha = 1 - exp(-dt / tau)`, `tau = face_smooth_ms/1000`.
 * Detections are matched to tracks by nearest centre (within 25% of the frame); a face that is not
-  matched opens a new track (snapped at first sight) and a track not seen this tick expires.
+  matched opens a new track (snapped at first sight).
+* Matching is by the **globally** nearest centre (closest detection/track pair first), not one
+  detection at a time, so two close faces cannot swap tracks for a frame. The distance limit is
+  **adaptive** (scaled to the detected face size, not a fixed slice of the frame), so a stale held
+  track can never steal a fresh detection that belongs to another face.
+* A track a detection no longer sees is **kept** (frozen at its last anchors) for `face_hold_ms`
+  instead of expiring at once, so a blink, a brief occlusion or a single missed detection does not
+  make the effect flicker or vanish. Once the hold elapses the effect **fades out** over
+  `face_fade_ms` (the distortion magnitude, the blur box and the debug markers all scale down
+  together), and the track is dropped only when the fade completes - so it never pops. If the face
+  reappears inside the hold window the same track is reused (matched by centre) and simply resumes
+  easing, so there is no snap. `face_hold_ms = 0` + `face_fade_ms = 0` restores the old
+  drop-at-once behaviour; a large `face_hold_ms` keeps the effect where the face was last seen until
+  it returns.
 * `face_smooth_ms = 0` disables smoothing (raw positions); larger values are smoother but lag more.
 * The three pose angles (`roll` from the eye axis, `yaw`/`pitch` from `solvePnP`) go through a
   **One-Euro filter** instead of a fixed ease: slow motion is steady, fast motion keeps little lag.
@@ -148,7 +163,9 @@ eased toward the latest detection on **every render frame**:
 * The point's `radius` and `magnitude` are the animated values; because they are shared by all faces,
   the animation (including the accumulating `Add`) applies to **every** face at that point.
 * If no face is detected (or tracking is off), there are no zones and the GPU pass is skipped, but
-  the animation keeps running so a pulse started now is visible as soon as a face appears.
+  the animation keeps running so a pulse started now is visible as soon as a face appears. While a
+  lost face is still inside its `face_hold_ms` window its zones are still drawn, frozen at the last
+  position, and they fade out smoothly over `face_fade_ms` once the hold ends.
 * While every magnitude sits at rest (0) the filter takes its zero-work fast path: no capture, no
   detection, no uniform upload and no GPU pass.
 
@@ -175,10 +192,5 @@ percent units, plus `faceTracking`, `faceAvailable`, `faceSequence` and `faceDet
   size as a near one (no per-face scale). Nudge `offset`/`radius` per point to taste.
 * Readback uses libobs `gs_texrender` + `gs_stagesurface` to grab the input a few times per second;
   an internal flag keeps the nested pass-through bounded (recursion guard).
-* **Display Capture / Game Capture inputs are not supported for tracking.** Capturing means
-  re-rendering the source from inside the filter's own render callback; on duplicator-based captures
-  that nested re-render hangs the GPU (`DXGI_ERROR_DEVICE_HUNG`) and OBS then loops on
-  "Rebuilding all assets" (which also pegs the CPU). Tracking is skipped for those inputs with a
-  warning in the OBS log - use a camera (Video Capture Device) source instead.
 * Quality depends on the detection resolution and the model; the defaults are tuned for low cost,
   not for crowded scenes.

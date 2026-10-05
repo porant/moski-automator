@@ -97,6 +97,11 @@ void Engine::configure(obs_data_t *s) {
     faceScore = std::clamp(obs_data_get_double(s, "face_score"), 0.1, 0.95);
     faceDetectHeight = std::clamp<int>((int)obs_data_get_int(s, "face_height"), 96, 480);
     faceSmoothMs = std::clamp(obs_data_get_double(s, "face_smooth_ms"), 0.0, 2000.0);
+    // How long a lost face keeps its last position before it starts to fade. 0 = fade at once; a
+    // large value keeps the effect where the face was last seen until it returns.
+    faceHoldMs = std::clamp(obs_data_get_double(s, "face_hold_ms"), 0.0, 3600000.0);
+    // After the hold window the effect fades out over this long (never pops away instantly).
+    faceFadeMs = std::clamp(obs_data_get_double(s, "face_fade_ms"), 0.0, 3600000.0);
     if (tracker) {
         FaceTrackerConfig c;
         c.maxFaces = faceMax;
@@ -180,6 +185,8 @@ Snapshot Engine::snapshot() const {
                uniformCalls,
                {logs.begin(), logs.end()}};
     s.faceTracking = faceTracking;
+    s.faceHoldMs = faceHoldMs;
+    s.faceFadeMs = faceFadeMs;
     s.effectBlur = effectBlur;
     s.effectDebug = effectDebug;
     if (tracker) {
@@ -201,24 +208,43 @@ void Engine::smoothFaces(const std::vector<FaceRect> &faces, double now) {
     const double alpha = (tau <= 0.0 || dt <= 0.0) ? 1.0 : (1.0 - std::exp(-dt / tau));
 
     std::array<bool, maxFaces> used{};
-    // Match each detection to the nearest existing track (within a limit); unmatched = new face.
+    // Match detections to tracks by the *globally* nearest centre instead of one detection at a
+    // time: a greedy left-to-right pass can hand a detection to the wrong track whenever two faces
+    // are close, and the point then jumps onto the other face for a frame. The distance limit is
+    // adaptive (scaled to the detected face size, not a fixed slice of the frame), so a stale held
+    // track far away can never steal a fresh detection that belongs to another face.
     std::array<int, maxFaces> assign{};
     assign.fill(-1);
-    for (size_t d = 0; d < faces.size() && d < maxFaces; ++d) {
-        int best = -1;
-        double bestDist = 25.0; // percent; farther than this is treated as a different face
-        for (int t = 0; t < maxFaces; ++t) {
-            if (used[t] || !tracks[t].valid)
-                continue;
-            const double dist = std::hypot(tracks[t].cx - faces[d].cx, tracks[t].cy - faces[d].cy);
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = t;
+    {
+        struct Pair {
+            double dist;
+            int detection;
+            int track;
+        };
+        std::array<Pair, maxFaces * maxFaces> pairs{};
+        int pairCount = 0;
+        for (size_t d = 0; d < faces.size() && d < maxFaces; ++d) {
+            const FaceRect &f = faces[d];
+            // A face moves little between detections; allow up to ~its own size, floored so a tiny
+            // distant face still tracks and capped so it never reaches a different face.
+            const double limit = std::clamp(0.75 * std::max(f.w, f.h), 6.0, 25.0); // percent
+            for (int t = 0; t < maxFaces; ++t) {
+                if (!tracks[t].valid)
+                    continue;
+                const double dist = std::hypot(tracks[t].cx - f.cx, tracks[t].cy - f.cy);
+                if (dist <= limit)
+                    pairs[pairCount++] = {dist, (int)d, t};
             }
         }
-        if (best >= 0) {
-            assign[d] = best;
-            used[best] = true;
+        // Closest pair first; each detection and each track can win at most one pairing.
+        std::sort(pairs.begin(), pairs.begin() + pairCount,
+                  [](const Pair &a, const Pair &b) { return a.dist < b.dist; });
+        for (int i = 0; i < pairCount; ++i) {
+            const auto &p = pairs[i];
+            if (assign[p.detection] >= 0 || used[p.track])
+                continue;
+            assign[p.detection] = p.track;
+            used[p.track] = true;
         }
     }
     for (size_t d = 0; d < faces.size() && d < maxFaces; ++d) {
@@ -280,11 +306,36 @@ void Engine::smoothFaces(const std::vector<FaceRect> &faces, double now) {
                 tr.hasLandmarks = false;
             }
         }
+        tracks[t].lastSeen = now;
         used[t] = true;
     }
-    for (int t = 0; t < maxFaces; ++t)
-        if (tracks[t].valid && !used[t])
-            tracks[t].valid = false; // face not seen this tick
+    // A detection tick that no longer sees a face must not make the effect vanish at once. Keep the
+    // track (frozen at its last anchors) fully visible for faceHoldMs, then fade it out smoothly
+    // over faceFadeMs; only once the fade completes is the track dropped. A face that comes back
+    // inside the window reuses the same track (matched above) and simply resumes, so a blink or a
+    // brief occlusion neither flickers nor pops.
+    const double holdSec = std::max(0.0, faceHoldMs) / 1000.0;
+    const double fadeSec = std::max(0.0, faceFadeMs) / 1000.0;
+    for (int t = 0; t < maxFaces; ++t) {
+        if (!tracks[t].valid)
+            continue;
+        if (used[t]) {
+            tracks[t].strength = 1.0; // currently detected
+            continue;
+        }
+        const double age = now - tracks[t].lastSeen; // seconds since the last matching detection
+        if (age <= holdSec) {
+            tracks[t].strength = 1.0; // still held: frozen at the last position
+            continue;
+        }
+        if (fadeSec <= 0.0 || age >= holdSec + fadeSec) {
+            tracks[t].valid = false; // hold + fade elapsed: drop the track
+            continue;
+        }
+        const double x = (age - holdSec) / fadeSec; // 0..1 across the fade window
+        const double e = x * x * (3.0 - 2.0 * x);   // smoothstep, so the fade eases in and out
+        tracks[t].strength = std::clamp(1.0 - e, 0.0, 1.0);
+    }
 }
 static void enumFilter(obs_source_t *parent, obs_source_t *child, void *data) {
     if (std::string(obs_source_get_id(child)) != filterId)
@@ -394,6 +445,10 @@ static void defaults(obs_data_t *s) {
     obs_data_set_default_double(s, "face_score", 0.7);
     obs_data_set_default_int(s, "face_height", 180);
     obs_data_set_default_double(s, "face_smooth_ms", 120);
+    // Keep a lost face's points in place (frozen) for a while, then fade them out so a blink or a
+    // brief occlusion neither flickers nor pops. 0 + 0 restores the old drop-at-once behaviour.
+    obs_data_set_default_double(s, "face_hold_ms", 10000);
+    obs_data_set_default_double(s, "face_fade_ms", 1000);
 }
 static void update(void *v, obs_data_t *s) {
     static_cast<ShaderController *>(v)->engine->configure(s);
@@ -650,12 +705,13 @@ static void render(void *v, gs_effect_t *) {
             // the frame, so a distant face gets proportionally smaller points.
             const double scale = faceScale ? std::clamp(tr.h / 100.0, 0.05, 3.0) : 1.0;
             // Face boxes feed the blur option and the debug overlay (detection box).
+            const double strength = tr.strength; // 1 while tracked/held, fades to 0 after the hold
             if ((effectBlur || effectDebug) && faceCount < maxFaces) {
                 float *b = boxes.data() + faceCount * 4;
                 b[0] = (float)tr.cx;
                 b[1] = (float)tr.cy;
-                b[2] = (float)tr.w;
-                b[3] = (float)tr.h;
+                b[2] = (float)(tr.w * strength); // shrink the box while fading, so blur/debug fade too
+                b[3] = (float)(tr.h * strength);
                 ++faceCount;
             }
             for (int p = 0; p < pointCount; ++p) {
@@ -667,8 +723,9 @@ static void render(void *v, gs_effect_t *) {
                     float *m = markers.data() + markerCount * 4;
                     m[0] = (float)ax;
                     m[1] = (float)ay;
-                    m[2] = (float)(1.5 * std::clamp(scale, 0.6, 2.0)); // marker size, percent
-                    m[3] = (float)p;                                   // point index -> colour
+                    // marker size, percent (shrinks with the fade so a lost face's markers melt away)
+                    m[2] = (float)(1.5 * std::clamp(scale, 0.6, 2.0) * strength);
+                    m[3] = (float)p; // point index -> colour
                     ++markerCount;
                 }
                 if (effectBlur == false && effectDebug == false && pMag[p] == 0.0)
@@ -678,7 +735,7 @@ static void render(void *v, gs_effect_t *) {
                     z[0] = (float)ax;
                     z[1] = (float)ay;
                     z[2] = (float)(pRadius[p] * scale);
-                    z[3] = (float)pMag[p];
+                    z[3] = (float)(pMag[p] * strength); // fade the distortion with the track
                     ++zoneCount;
                 }
             }
@@ -775,6 +832,9 @@ static obs_properties_t *properties(void *v) {
         obs_properties_add_float_slider(ft, "face_score", "Score threshold", 0.1, 0.95, 0.05);
         obs_properties_add_int_slider(ft, "face_height", "Detection frame height (px)", 96, 480, 12);
         obs_properties_add_float_slider(ft, "face_smooth_ms", "Point smoothing (ms)", 0, 1000, 10);
+        obs_properties_add_float(ft, "face_hold_ms", "Hold points when the face is lost (ms)", 0,
+                                 3600000, 50);
+        obs_properties_add_float(ft, "face_fade_ms", "Fade out a lost face over (ms)", 0, 60000, 50);
         obs_properties_add_group(props, "face_tracking_group", "Face tracking", OBS_GROUP_NORMAL, ft);
     }
     AnimationController c;

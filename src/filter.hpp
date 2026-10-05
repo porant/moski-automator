@@ -33,6 +33,8 @@ struct Snapshot {
     uint64_t faceSequence = 0;
     double faceDetectMs = 0;
     uint64_t faceDropped = 0;
+    double faceHoldMs = 0;
+    double faceFadeMs = 0;
     bool effectBlur = false;
     bool effectDebug = false;
 };
@@ -59,11 +61,13 @@ class Engine {
     double faceScore = 0.7;
     int faceDetectHeight = 180;                        // downscale height of the detection frame
     double faceSmoothMs = 120;                         // temporal smoothing of the anchor points
+    double faceHoldMs = 10000;                         // keep the last position this long after a loss (ms)
+    double faceFadeMs = 1000;                          // then fade it out over this long, so it never pops
     double nextFaceCapture = 0;
     std::shared_ptr<FaceTracker> tracker = std::make_shared<FaceTracker>();
     // Persistent per-face tracks so the points can be eased between the low-FPS detections instead
     // of jumping to the latest detection each frame (removes jitter). Faces are matched by nearest
-    // centre; unmatched detections open a new track, unseen tracks expire.
+    // centre; unmatched detections open a new track, unseen tracks expire after faceHoldMs.
     struct FaceTrack {
         double cx = 0, cy = 0, w = 0, h = 0;
         std::array<FacePoint, pointCount> anchors{};
@@ -75,6 +79,12 @@ class Engine {
         // One-Euro filters so the noisy per-detection angles do not make the pose (and the debug
         // gizmo) jump around between detections. Reset when a track first appears.
         OneEuroFilter rollF, yawF, pitchF;
+        // nowSeconds() of the last detection that matched this track. Used to keep the points
+        // (frozen) for faceHoldMs after the face is lost instead of dropping them at once.
+        double lastSeen = 0;
+        // Fade factor 1..0: 1 while the face is tracked or still inside its hold window, then it
+        // ramps down over faceFadeMs so a lost face's effect disappears smoothly instead of popping.
+        double strength = 1.0;
         bool valid = false;
     };
     std::array<FaceTrack, maxFaces> tracks{};

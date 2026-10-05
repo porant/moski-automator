@@ -1,0 +1,340 @@
+﻿diff --git a/src/filter.cpp b/src/filter.cpp
+index 79aa028..43d0f16 100644
+--- a/src/filter.cpp
++++ b/src/filter.cpp
+@@ -97,6 +97,13 @@ void Engine::configure(obs_data_t *s) {
+     faceScore = std::clamp(obs_data_get_double(s, "face_score"), 0.1, 0.95);
+     faceDetectHeight = std::clamp<int>((int)obs_data_get_int(s, "face_height"), 96, 480);
+     faceSmoothMs = std::clamp(obs_data_get_double(s, "face_smooth_ms"), 0.0, 2000.0);
++    // How long a lost face keeps its last position before it starts to fade. 0 = fade at once; a
++    // large value keeps the effect where the face was last seen until it returns.
++    faceHoldMs = std::clamp(obs_data_get_double(s, "face_hold_ms"), 0.0, 3600000.0);
++    // After the hold window the effect fades out over this long (never pops away instantly).
++    faceFadeMs = std::clamp(obs_data_get_double(s, "face_fade_ms"), 0.0, 3600000.0);
++    // Opt-in: allow tracking on duplicator-backed capture sources (racy - may hang the GPU).
++    faceCaptureSources = obs_data_get_bool(s, "face_capture_sources");
+     if (tracker) {
+         FaceTrackerConfig c;
+         c.maxFaces = faceMax;
+@@ -180,6 +187,9 @@ Snapshot Engine::snapshot() const {
+                uniformCalls,
+                {logs.begin(), logs.end()}};
+     s.faceTracking = faceTracking;
++    s.faceHoldMs = faceHoldMs;
++    s.faceFadeMs = faceFadeMs;
++    s.faceCaptureSources = faceCaptureSources;
+     s.effectBlur = effectBlur;
+     s.effectDebug = effectDebug;
+     if (tracker) {
+@@ -201,24 +211,43 @@ void Engine::smoothFaces(const std::vector<FaceRect> &faces, double now) {
+     const double alpha = (tau <= 0.0 || dt <= 0.0) ? 1.0 : (1.0 - std::exp(-dt / tau));
+ 
+     std::array<bool, maxFaces> used{};
+-    // Match each detection to the nearest existing track (within a limit); unmatched = new face.
++    // Match detections to tracks by the *globally* nearest centre instead of one detection at a
++    // time: a greedy left-to-right pass can hand a detection to the wrong track whenever two faces
++    // are close, and the point then jumps onto the other face for a frame. The distance limit is
++    // adaptive (scaled to the detected face size, not a fixed slice of the frame), so a stale held
++    // track far away can never steal a fresh detection that belongs to another face.
+     std::array<int, maxFaces> assign{};
+     assign.fill(-1);
+-    for (size_t d = 0; d < faces.size() && d < maxFaces; ++d) {
+-        int best = -1;
+-        double bestDist = 25.0; // percent; farther than this is treated as a different face
+-        for (int t = 0; t < maxFaces; ++t) {
+-            if (used[t] || !tracks[t].valid)
+-                continue;
+-            const double dist = std::hypot(tracks[t].cx - faces[d].cx, tracks[t].cy - faces[d].cy);
+-            if (dist < bestDist) {
+-                bestDist = dist;
+-                best = t;
++    {
++        struct Pair {
++            double dist;
++            int detection;
++            int track;
++        };
++        std::array<Pair, maxFaces * maxFaces> pairs{};
++        int pairCount = 0;
++        for (size_t d = 0; d < faces.size() && d < maxFaces; ++d) {
++            const FaceRect &f = faces[d];
++            // A face moves little between detections; allow up to ~its own size, floored so a tiny
++            // distant face still tracks and capped so it never reaches a different face.
++            const double limit = std::clamp(0.75 * std::max(f.w, f.h), 6.0, 25.0); // percent
++            for (int t = 0; t < maxFaces; ++t) {
++                if (!tracks[t].valid)
++                    continue;
++                const double dist = std::hypot(tracks[t].cx - f.cx, tracks[t].cy - f.cy);
++                if (dist <= limit)
++                    pairs[pairCount++] = {dist, (int)d, t};
+             }
+         }
+-        if (best >= 0) {
+-            assign[d] = best;
+-            used[best] = true;
++        // Closest pair first; each detection and each track can win at most one pairing.
++        std::sort(pairs.begin(), pairs.begin() + pairCount,
++                  [](const Pair &a, const Pair &b) { return a.dist < b.dist; });
++        for (int i = 0; i < pairCount; ++i) {
++            const auto &p = pairs[i];
++            if (assign[p.detection] >= 0 || used[p.track])
++                continue;
++            assign[p.detection] = p.track;
++            used[p.track] = true;
+         }
+     }
+     for (size_t d = 0; d < faces.size() && d < maxFaces; ++d) {
+@@ -280,11 +309,36 @@ void Engine::smoothFaces(const std::vector<FaceRect> &faces, double now) {
+                 tr.hasLandmarks = false;
+             }
+         }
++        tracks[t].lastSeen = now;
+         used[t] = true;
+     }
+-    for (int t = 0; t < maxFaces; ++t)
+-        if (tracks[t].valid && !used[t])
+-            tracks[t].valid = false; // face not seen this tick
++    // A detection tick that no longer sees a face must not make the effect vanish at once. Keep the
++    // track (frozen at its last anchors) fully visible for faceHoldMs, then fade it out smoothly
++    // over faceFadeMs; only once the fade completes is the track dropped. A face that comes back
++    // inside the window reuses the same track (matched above) and simply resumes, so a blink or a
++    // brief occlusion neither flickers nor pops.
++    const double holdSec = std::max(0.0, faceHoldMs) / 1000.0;
++    const double fadeSec = std::max(0.0, faceFadeMs) / 1000.0;
++    for (int t = 0; t < maxFaces; ++t) {
++        if (!tracks[t].valid)
++            continue;
++        if (used[t]) {
++            tracks[t].strength = 1.0; // currently detected
++            continue;
++        }
++        const double age = now - tracks[t].lastSeen; // seconds since the last matching detection
++        if (age <= holdSec) {
++            tracks[t].strength = 1.0; // still held: frozen at the last position
++            continue;
++        }
++        if (fadeSec <= 0.0 || age >= holdSec + fadeSec) {
++            tracks[t].valid = false; // hold + fade elapsed: drop the track
++            continue;
++        }
++        const double x = (age - holdSec) / fadeSec; // 0..1 across the fade window
++        const double e = x * x * (3.0 - 2.0 * x);   // smoothstep, so the fade eases in and out
++        tracks[t].strength = std::clamp(1.0 - e, 0.0, 1.0);
++    }
+ }
+ static void enumFilter(obs_source_t *parent, obs_source_t *child, void *data) {
+     if (std::string(obs_source_get_id(child)) != filterId)
+@@ -346,7 +400,7 @@ struct ShaderController {
+     gs_effect_t *effect = nullptr;
+     gs_eparam_t *zoneCount = nullptr, *zoneData = nullptr;
+     gs_eparam_t *markerCount = nullptr, *markerData = nullptr;
+-    gs_eparam_t *faceCount = nullptr, *faceBox = nullptr;
++    gs_eparam_t *faceCount = nullptr, *faceBox = nullptr, *faceAlpha = nullptr;
+     gs_eparam_t *blurFaces = nullptr, *blurPx = nullptr, *debugPoints = nullptr;
+     gs_eparam_t *animate = nullptr, *size = nullptr, *time = nullptr;
+     std::shared_ptr<Engine> engine = std::make_shared<Engine>();
+@@ -394,6 +448,12 @@ static void defaults(obs_data_t *s) {
+     obs_data_set_default_double(s, "face_score", 0.7);
+     obs_data_set_default_int(s, "face_height", 180);
+     obs_data_set_default_double(s, "face_smooth_ms", 120);
++    // Keep a lost face's points in place (frozen) for a while, then fade them out so a blink or a
++    // brief occlusion neither flickers nor pops. 0 + 0 restores the old drop-at-once behaviour.
++    obs_data_set_default_double(s, "face_hold_ms", 10000);
++    obs_data_set_default_double(s, "face_fade_ms", 1000);
++    // Off by default; see Engine::faceCaptureSources. Opt in to risk tracking a Display/Game Capture.
++    obs_data_set_default_bool(s, "face_capture_sources", false);
+ }
+ static void update(void *v, obs_data_t *s) {
+     static_cast<ShaderController *>(v)->engine->configure(s);
+@@ -434,12 +494,13 @@ static void *create(obs_data_t *s, obs_source_t *source) {
+     f->markerData = gs_effect_get_param_by_name(f->effect, "marker_data");
+     f->faceCount = gs_effect_get_param_by_name(f->effect, "face_count");
+     f->faceBox = gs_effect_get_param_by_name(f->effect, "face_box");
++    f->faceAlpha = gs_effect_get_param_by_name(f->effect, "face_alpha");
+     f->blurFaces = gs_effect_get_param_by_name(f->effect, "blur_faces");
+     f->blurPx = gs_effect_get_param_by_name(f->effect, "blur_px");
+     f->debugPoints = gs_effect_get_param_by_name(f->effect, "debug_points");
+     if (!f->zoneCount || !f->zoneData || !f->animate || !f->size || !f->time || !f->markerCount ||
+-        !f->markerData || !f->faceCount || !f->faceBox || !f->blurFaces || !f->blurPx ||
+-        !f->debugPoints) {
++        !f->markerData || !f->faceCount || !f->faceBox || !f->faceAlpha || !f->blurFaces ||
++        !f->blurPx || !f->debugPoints) {
+         blog(LOG_ERROR, "[OPA] Required shader uniforms missing");
+         destroy(f);
+         return nullptr;
+@@ -458,6 +519,51 @@ static void *create(obs_data_t *s, obs_source_t *source) {
+     }
+     return f;
+ }
++// Display / Game / Window Capture sources pull frames from a DXGI duplicator. Re-rendering such a
++// source from inside this filter's render callback (which is what the detection capture below does)
++// can hang the GPU with DXGI_ERROR_DEVICE_HUNG: the driver resets, every monitor briefly goes black
++// and OBS then loops on "Rebuilding all assets". Face tracking is therefore skipped for them; point
++// the filter at a camera (Video Capture Device) source instead. See docs/FACE_TRACKING.md.
++static bool isDuplicatorCapture(obs_source_t *s) {
++    if (!s)
++        return false;
++    const char *id = obs_source_get_id(s);
++    if (!id)
++        return false;
++    static const char *captures[] = {
++        "monitor_capture",                   // Windows Display Capture
++        "display_capture",                   // generic / macOS Screen Capture
++        "game_capture",                      // Game Capture
++        "window_capture",                    // Window Capture
++        "d3d11_capture",                     // legacy display capture
++        "duplicator_capture",                // macOS Display Capture
++        "xshm_input",                        // Linux X11 screen capture
++        "xcomposite_input",                  // Linux XComposite window capture
++        "pipewire-screen-capture-source",    // Linux PipeWire portal (monitor)
++        "pipewire-desktop-capture-source",   // Linux PipeWire portal (desktop)
++    };
++    for (const char *c : captures)
++        if (strcmp(id, c) == 0)
++            return true;
++    // A scene or group re-renders its children, so a capture anywhere inside is just as unsafe.
++    // (Only scene/group targets take this path; a camera returns above.)
++    if (obs_scene_t *scene = obs_scene_from_source(s)) {
++        bool found = false;
++        obs_scene_enum_items(
++            scene,
++            [](obs_scene_t *, obs_sceneitem_t *item, void *data) -> bool {
++                bool *hit = static_cast<bool *>(data);
++                if (isDuplicatorCapture(obs_sceneitem_get_source(item))) {
++                    *hit = true;
++                    return false; // stop the walk
++                }
++                return true;
++            },
++            &found);
++        return found;
++    }
++    return false;
++}
+ // Grabs a small, downscaled RGBA frame of the filter's own input and hands it to the detector.
+ // This is the *only* extra GPU cost of face tracking and it only runs while (a) tracking is on and
+ // (b) a point magnitude is non-zero, at the configured detection FPS - not per
+@@ -561,6 +667,10 @@ static void render(void *v, gs_effect_t *) {
+         obs_source_skip_video_filter(f.source);
+         return;
+     }
++    // A duplicator-backed capture source must never be re-rendered for a detection frame: that
++    // nested render is what hangs the GPU. Skip tracking (and the capture) entirely for it. Declared
++    // at function scope so the throttled status log below can report it as well.
++    const bool captureUnsupported = isDuplicatorCapture(target);
+     // Face tracking: capture at the configured detection FPS, then ease the anchor points toward
+     // the latest detections on every render frame so the low-FPS detection does not make the
+     // points jitter. Positions live in Engine::tracks.
+@@ -570,7 +680,8 @@ static void render(void *v, gs_effect_t *) {
+         bool run = false, doCapture = false;
+         {
+             std::lock_guard lock(e.mutex);
+-            run = e.faceTracking && e.tracker && e.tracker->available();
++            run = e.faceTracking && e.tracker && e.tracker->available() &&
++                  (!captureUnsupported || e.faceCaptureSources);
+             if (run && now >= e.nextFaceCapture) {
+                 e.nextFaceCapture = now + 1.0 / std::max(1, e.faceFps);
+                 doCapture = true;
+@@ -625,19 +736,31 @@ static void render(void *v, gs_effect_t *) {
+             }
+             constexpr double kDeg = 57.29577951308232;
+             const std::string terr = e.tracker ? e.tracker->lastError() : std::string();
++            if (captureUnsupported && e.faceTracking && !e.faceCaptureSources)
++                blog(LOG_WARNING,
++                     "[OPA] face tracking is disabled for this source: Display/Game/Window Capture "
++                     "inputs cannot be re-rendered for detection (it hangs the GPU). Use a camera "
++                     "(Video Capture Device) source, or enable 'Track on Display/Game/Window Capture "
++                     "too' at your own risk.");
++            else if (captureUnsupported && e.faceTracking)
++                blog(LOG_WARNING,
++                     "[OPA] tracking a Display/Game/Window Capture source (experimental): the nested "
++                     "detection render can hang the GPU. Prefer a camera source.");
+             blog(LOG_INFO,
+-                 "[OPA] face: tracking=%d available=%d faces=%d seq=%llu detect=%.1fms | RAW lmValid=%d "
+-                 "poseValid=%d roll=%+.1f yaw=%+.1f pitch=%+.1f | TRACK valid=%d roll=%+.1f yaw=%+.1f "
+-                 "pitch=%+.1f (deg) err=\"%s\"",
+-                 (int)e.faceTracking, (int)avail, (int)r.faces.size(), (unsigned long long)r.sequence,
+-                 r.detectMs, (int)lv, (int)rpose, rroll * kDeg, ryaw * kDeg, rpitch * kDeg,
+-                 (int)tvalid, troll * kDeg, tyaw * kDeg, tpitch * kDeg, terr.c_str());
++                 "[OPA] face: tracking=%d available=%d blocked=%d faces=%d seq=%llu detect=%.1fms | "
++                 "RAW lmValid=%d poseValid=%d roll=%+.1f yaw=%+.1f pitch=%+.1f | TRACK valid=%d "
++                 "roll=%+.1f yaw=%+.1f pitch=%+.1f (deg) err=\"%s\"",
++                 (int)e.faceTracking, (int)avail, (int)captureUnsupported, (int)r.faces.size(),
++                 (unsigned long long)r.sequence, r.detectMs, (int)lv, (int)rpose, rroll * kDeg,
++                 ryaw * kDeg, rpitch * kDeg, (int)tvalid, troll * kDeg, tyaw * kDeg, tpitch * kDeg,
++                 terr.c_str());
+         }
+     }
+     // From the smoothed tracks build: distortion zones, debug markers and blur face boxes.
+     std::array<float, maxZones * 4> zones{};
+     std::array<float, maxMarkers * 4> markers{}; // one marker per (face x point anchor)
+     std::array<float, maxFaces * 4> boxes{};
++    std::array<float, maxFaces> faceAlpha{}; // per-face fade factor, so blur/debug fade too
+     int zoneCount = 0, markerCount = 0, faceCount = 0;
+     {
+         std::lock_guard lock(f.engine->mutex);
+@@ -650,12 +773,14 @@ static void render(void *v, gs_effect_t *) {
+             // the frame, so a distant face gets proportionally smaller points.
+             const double scale = faceScale ? std::clamp(tr.h / 100.0, 0.05, 3.0) : 1.0;
+             // Face boxes feed the blur option and the debug overlay (detection box).
++            const double strength = tr.strength; // 1 while tracked/held, fades to 0 after the hold
+             if ((effectBlur || effectDebug) && faceCount < maxFaces) {
+                 float *b = boxes.data() + faceCount * 4;
+                 b[0] = (float)tr.cx;
+                 b[1] = (float)tr.cy;
+                 b[2] = (float)tr.w;
+                 b[3] = (float)tr.h;
++                faceAlpha[faceCount] = (float)strength;
+                 ++faceCount;
+             }
+             for (int p = 0; p < pointCount; ++p) {
+@@ -667,8 +792,9 @@ static void render(void *v, gs_effect_t *) {
+                     float *m = markers.data() + markerCount * 4;
+                     m[0] = (float)ax;
+                     m[1] = (float)ay;
+-                    m[2] = (float)(1.5 * std::clamp(scale, 0.6, 2.0)); // marker size, percent
+-                    m[3] = (float)p;                                   // point index -> colour
++                    // marker size, percent (shrinks with the fade so a lost face's markers melt away)
++                    m[2] = (float)(1.5 * std::clamp(scale, 0.6, 2.0) * strength);
++                    m[3] = (float)p; // point index -> colour
+                     ++markerCount;
+                 }
+                 if (effectBlur == false && effectDebug == false && pMag[p] == 0.0)
+@@ -678,7 +804,7 @@ static void render(void *v, gs_effect_t *) {
+                     z[0] = (float)ax;
+                     z[1] = (float)ay;
+                     z[2] = (float)(pRadius[p] * scale);
+-                    z[3] = (float)pMag[p];
++                    z[3] = (float)(pMag[p] * strength); // fade the distortion with the track
+                     ++zoneCount;
+                 }
+             }
+@@ -697,6 +823,7 @@ static void render(void *v, gs_effect_t *) {
+     gs_effect_set_val(f.markerData, markers.data(), sizeof(float) * 4 * maxMarkers);
+     gs_effect_set_int(f.markerCount, markerCount);
+     gs_effect_set_val(f.faceBox, boxes.data(), sizeof(float) * 4 * maxFaces);
++    gs_effect_set_val(f.faceAlpha, faceAlpha.data(), sizeof(float) * maxFaces);
+     gs_effect_set_int(f.faceCount, faceCount);
+     gs_effect_set_bool(f.blurFaces, effectBlur);
+     gs_effect_set_float(f.blurPx, (float)faceBlurPx);
+@@ -708,7 +835,7 @@ static void render(void *v, gs_effect_t *) {
+     gs_effect_set_float(f.time, sine ? (float)elapsed : 0.0f);
+     {
+         std::lock_guard lock(f.engine->mutex);
+-        f.engine->uniformCalls += 12;
++        f.engine->uniformCalls += 13;
+     }
+     obs_source_process_filter_end(f.source, f.effect, w, h);
+ }
+@@ -775,6 +902,11 @@ static obs_properties_t *properties(void *v) {
+         obs_properties_add_float_slider(ft, "face_score", "Score threshold", 0.1, 0.95, 0.05);
+         obs_properties_add_int_slider(ft, "face_height", "Detection frame height (px)", 96, 480, 12);
+         obs_properties_add_float_slider(ft, "face_smooth_ms", "Point smoothing (ms)", 0, 1000, 10);
++        obs_properties_add_float(ft, "face_hold_ms", "Hold points when the face is lost (ms)", 0,
++                                 3600000, 50);
++        obs_properties_add_float(ft, "face_fade_ms", "Fade out a lost face over (ms)", 0, 60000, 50);
++        obs_properties_add_bool(ft, "face_capture_sources",
++                                "Track on Display/Game/Window Capture too (may hang the GPU)");
+         obs_properties_add_group(props, "face_tracking_group", "Face tracking", OBS_GROUP_NORMAL, ft);
+     }
+     AnimationController c;

@@ -73,6 +73,10 @@ static void callback(obs_data_t *r, obs_data_t *out, void *priv) {
                 obs_data_set_double(s, "face_score", number(r, "score"));
             if (has(r, "smoothMs"))
                 obs_data_set_double(s, "face_smooth_ms", number(r, "smoothMs"));
+            if (has(r, "holdMs"))
+                obs_data_set_double(s, "face_hold_ms", number(r, "holdMs"));
+            if (has(r, "fadeMs"))
+                obs_data_set_double(s, "face_fade_ms", number(r, "fadeMs"));
             if (has(r, "blur"))
                 obs_data_set_bool(s, "effect_blur", obs_data_get_bool(r, "blur"));
             if (has(r, "debug"))
@@ -172,6 +176,8 @@ static void callback(obs_data_t *r, obs_data_t *out, void *priv) {
         obs_data_set_bool(out, "faceAvailable", s.faceAvailable);
         obs_data_set_int(out, "faceSequence", (long long)s.faceSequence);
         obs_data_set_double(out, "faceDetectMs", s.faceDetectMs);
+        obs_data_set_double(out, "faceHoldMs", s.faceHoldMs);
+        obs_data_set_double(out, "faceFadeMs", s.faceFadeMs);
         obs_data_set_bool(out, "effectBlur", s.effectBlur);
         obs_data_set_bool(out, "effectDebug", s.effectDebug);
         obs_data_set_bool(out, "ok", true);

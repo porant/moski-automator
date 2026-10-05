@@ -24,6 +24,8 @@ int main() {
     p.mode = 2;
     p.faceTracking = true;
     p.faceSmoothMs = 90;
+    p.faceHoldMs = 1500;
+    p.faceFadeMs = 800;
     p.effectBlur = true;
     p.faceBlurPx = 32;
     p.effectDebug = true;
@@ -56,6 +58,8 @@ int main() {
     check(o.value("mode").toInt() == 2, "mode exported");
     check(o.value("face_tracking").toBool(), "face_tracking exported");
     check(near(o.value("face_smooth_ms").toDouble(), 90), "face_smooth_ms exported");
+    check(near(o.value("face_hold_ms").toDouble(), 1500), "face_hold_ms exported");
+    check(near(o.value("face_fade_ms").toDouble(), 800), "face_fade_ms exported");
     check(o.value("effect_blur").toBool(), "effect_blur exported");
     check(near(o.value("face_blur_px").toDouble(), 32), "face_blur_px exported");
     check(o.value("effect_debug").toBool(), "effect_debug exported");
@@ -87,7 +91,8 @@ int main() {
     QString err = "unset";
     check(presetFromJson(text, back, &err), "exported text imports back", err);
     check(back.mode == p.mode && back.faceTracking == p.faceTracking &&
-              near(back.faceSmoothMs, p.faceSmoothMs) && back.effectBlur == p.effectBlur &&
+              near(back.faceSmoothMs, p.faceSmoothMs) && near(back.faceHoldMs, p.faceHoldMs) &&
+              near(back.faceFadeMs, p.faceFadeMs) && back.effectBlur == p.effectBlur &&
               near(back.faceBlurPx, p.faceBlurPx) && back.effectDebug == p.effectDebug &&
               back.faceScale == p.faceScale && near(back.defaultDurationMs, p.defaultDurationMs) &&
               back.defaultEasing == p.defaultEasing,
