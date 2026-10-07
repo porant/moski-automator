@@ -9,22 +9,24 @@
   vcvars: `C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat`
   (или `...\VC\Auxiliary\Build\vcvars64.bat`)
 - **CMake 4.4.3** — доступен как `cmake` в PATH.
-- **OBS SDK 32.2.1**: `C:/dev/obs-sdk`   ← ДЛЯ ТЕКУЩЕЙ ЦЕЛИ (OBS 32.2.1)
-- **Qt 6.11.1** (для OBS 32.2.1): `C:/dev/opa-sdk/Qt`
+- **OBS SDK 32.1.0**: `C:/dev/obs-sdk-32.1.0`   ← ДЛЯ ТЕКУЩЕЙ ЦЕЛИ (OBS 32.1.0)
+- **Qt 6.8.3** (для OBS 32.1.0): `C:/dev/opa-sdk/qt6-raw-6.8.3`
+- (Альтернатива) OBS SDK 32.2.1 `C:/dev/obs-sdk` + Qt 6.11.1 `C:/dev/opa-sdk/Qt`.
 - **OpenCV 4.10**: `C:/dev/opencv/opencv/build` (реальный путь к конфигу:
   `x64/vc16/lib/OpenCVConfig.cmake`; CMakeLists сам подберёт `OpenCV_RUNTIME=vc16`)
 
 ### ⚠️ ВАЖНО: сборка ДОЛЖНА совпадать с версией OBS/Qt
 
-OBS 32.2.1 работает на **Qt 6.11.1**. Если собрать плагин под Qt 6.8.3 (старый набор
-`C:/dev/obs-sdk-32.1.0` + `C:/dev/opa-sdk/qt6-raw-6.8.3`), OBS **падает** с
+Цель сейчас — **OBS 32.1.0** (Qt 6.8.3). Набор `C:/dev/obs-sdk` + `C:/dev/opa-sdk/Qt`
+(OBS 32.2.1, Qt 6.11.1) собирает плагин, который на OBS 32.1.0 (Qt 6.8.3) падает с
 `Unhandled exception: c0000005`, Fault address в `qt6widgets.dll`, стек вида
 `AnimatorPanel::pull ← select ← reload ← <таймер>` — это несовпадение ABI Qt.
 Всегда собирай под набор, соответствующий запускаемому OBS:
 его можно узнать в логе OBS по строке `Qt Version: <x> (runtime)`.
 
-Готовый скрипт: `C:\dev\opa-sdk\build-plugin.bat` (конфигурирует, собирает, гоняет ctest,
-ставит в `stage`). Он использует `C:/dev/obs-sdk` + `C:/dev/opa-sdk/Qt`.
+Готовый скрипт: `C:\dev\opa-sdk\build-32.1.0.bat` (конфигурирует, собирает, гоняет ctest,
+ставит в `stage`). Он использует `C:/dev/obs-sdk-32.1.0` + `C:/dev/opa-sdk/qt6-raw-6.8.3`
+и `-DOpenCV_DIR=C:/dev/opencv/opencv/build`.
 
 ### Отдельная засада: OpenCV_DIR кэшируется
 
@@ -64,7 +66,7 @@ C:\dev\opa-sdk\build-plugin.bat
 Вручную (эквивалент; `OpenCV_DIR` обязателен, иначе face tracking пропадёт):
 
 ```powershell
-cmd /c '"C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_PREFIX_PATH=C:/dev/obs-sdk;C:/dev/opa-sdk/Qt" -DBUILD_TESTING=ON -DOpenCV_DIR=C:/dev/opencv/opencv/build && cmake --build build && ctest --test-dir build --output-on-failure && cmake --install build --prefix stage'
+cmd /c '"C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_PREFIX_PATH=C:/dev/obs-sdk-32.1.0;C:/dev/opa-sdk/qt6-raw-6.8.3" -DBUILD_TESTING=ON -DOpenCV_DIR=C:/dev/opencv/opencv/build && cmake --build build && ctest --test-dir build --output-on-failure && cmake --install build --prefix stage'
 ```
 
 Инкрементально (когда `build/` уже настроен):
